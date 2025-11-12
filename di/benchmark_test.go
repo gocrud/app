@@ -67,82 +67,88 @@ type BenchAPIService struct {
 func BenchmarkBuild_Simple(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
-		di.Bind[BenchLogger](&BenchConsoleLogger{})
-		di.Provide(&BenchSimpleService{})
-		di.MustBuild()
+		container := di.NewContainer()
+		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+		container.Provide(&BenchSimpleService{})
+		container.Build()
 	}
 }
 
 func BenchmarkBuild_Medium(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
-		di.Bind[BenchLogger](&BenchConsoleLogger{})
-		di.Bind[BenchDatabase](&BenchMySQLDB{})
-		di.Bind[BenchCache](&BenchRedisCache{})
-		di.Provide(&BenchMediumService{})
-		di.MustBuild()
+		container := di.NewContainer()
+		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+		di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
+		di.BindWith[BenchCache](container, &BenchRedisCache{})
+		container.Provide(&BenchMediumService{})
+		container.Build()
 	}
 }
 
 func BenchmarkBuild_Complex(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
-		di.Bind[BenchLogger](&BenchConsoleLogger{})
-		di.Bind[BenchDatabase](&BenchMySQLDB{})
-		di.Bind[BenchCache](&BenchRedisCache{})
-		di.Provide(&BenchRepository{})
-		di.Provide(&BenchBusinessService{})
-		di.Provide(&BenchAPIService{})
-		di.MustBuild()
+		container := di.NewContainer()
+		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+		di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
+		di.BindWith[BenchCache](container, &BenchRedisCache{})
+		container.Provide(&BenchRepository{})
+		container.Provide(&BenchBusinessService{})
+		container.Provide(&BenchAPIService{})
+		container.Build()
 	}
 }
 
 // Benchmark 2: 注入性能（Build 后）
 func BenchmarkInject_Simple(b *testing.B) {
-	di.Reset()
-	di.Bind[BenchLogger](&BenchConsoleLogger{})
-	di.Provide(&BenchSimpleService{})
-	di.MustBuild()
+	container := di.NewContainer()
+	di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+	container.Provide(&BenchSimpleService{})
+	container.Build()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = di.Inject[*BenchSimpleService]()
+		var svc *BenchSimpleService
+		container.Inject(&svc)
+		_ = svc
 	}
 }
 
 func BenchmarkInject_Medium(b *testing.B) {
-	di.Reset()
-	di.Bind[BenchLogger](&BenchConsoleLogger{})
-	di.Bind[BenchDatabase](&BenchMySQLDB{})
-	di.Bind[BenchCache](&BenchRedisCache{})
-	di.Provide(&BenchMediumService{})
-	di.MustBuild()
+	container := di.NewContainer()
+	di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+	di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
+	di.BindWith[BenchCache](container, &BenchRedisCache{})
+	container.Provide(&BenchMediumService{})
+	container.Build()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = di.Inject[*BenchMediumService]()
+		var svc *BenchMediumService
+		container.Inject(&svc)
+		_ = svc
 	}
 }
 
 func BenchmarkInject_Complex(b *testing.B) {
-	di.Reset()
-	di.Bind[BenchLogger](&BenchConsoleLogger{})
-	di.Bind[BenchDatabase](&BenchMySQLDB{})
-	di.Bind[BenchCache](&BenchRedisCache{})
-	di.Provide(&BenchRepository{})
-	di.Provide(&BenchBusinessService{})
-	di.Provide(&BenchAPIService{})
-	di.MustBuild()
+	container := di.NewContainer()
+	di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+	di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
+	di.BindWith[BenchCache](container, &BenchRedisCache{})
+	container.Provide(&BenchRepository{})
+	container.Provide(&BenchBusinessService{})
+	container.Provide(&BenchAPIService{})
+	container.Build()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = di.Inject[*BenchAPIService]()
+		var svc *BenchAPIService
+		container.Inject(&svc)
+		_ = svc
 	}
 }
 
@@ -150,31 +156,31 @@ func BenchmarkInject_Complex(b *testing.B) {
 func BenchmarkProvide_Bind(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
-		di.Bind[BenchLogger](&BenchConsoleLogger{})
-		di.MustBuild()
+		container := di.NewContainer()
+		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+		container.Build()
 	}
 }
 
 func BenchmarkProvide_ProvideType(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
-		di.ProvideType(di.TypeProvider{
+		container := di.NewContainer()
+		container.ProvideType(di.TypeProvider{
 			Provide: di.TypeOf[BenchLogger](),
 			UseType: &BenchConsoleLogger{},
 		})
-		di.MustBuild()
+		container.Build()
 	}
 }
 
 func BenchmarkProvide_Direct(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
-		di.Bind[BenchLogger](&BenchConsoleLogger{})
-		di.Provide(&BenchSimpleService{})
-		di.MustBuild()
+		container := di.NewContainer()
+		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+		container.Provide(&BenchSimpleService{})
+		container.Build()
 	}
 }
 
@@ -182,9 +188,9 @@ func BenchmarkProvide_Direct(b *testing.B) {
 func BenchmarkProvide_Instance(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
-		di.Bind[BenchLogger](&BenchConsoleLogger{})
-		di.MustBuild()
+		container := di.NewContainer()
+		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+		container.Build()
 	}
 }
 
@@ -195,12 +201,12 @@ func BenchmarkProvide_Constructor(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
-		di.ProvideType(di.TypeProvider{
+		container := di.NewContainer()
+		container.ProvideType(di.TypeProvider{
 			Provide: di.TypeOf[BenchLogger](),
 			UseType: constructor,
 		})
-		di.MustBuild()
+		container.Build()
 	}
 }
 
@@ -208,38 +214,40 @@ func BenchmarkProvide_Constructor(b *testing.B) {
 func BenchmarkBuild_LargeScale(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		di.Reset()
+		container := di.NewContainer()
 
 		// 注册基础服务
-		di.Bind[BenchLogger](&BenchConsoleLogger{})
-		di.Bind[BenchDatabase](&BenchMySQLDB{})
-		di.Bind[BenchCache](&BenchRedisCache{})
+		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+		di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
+		di.BindWith[BenchCache](container, &BenchRedisCache{})
 
 		// 注册多个服务实例（同一类型只能注册一次）
-		di.Provide(&BenchRepository{})
-		di.Provide(&BenchBusinessService{})
-		di.Provide(&BenchAPIService{})
-		di.Provide(&BenchSimpleService{})
-		di.Provide(&BenchMediumService{})
+		container.Provide(&BenchRepository{})
+		container.Provide(&BenchBusinessService{})
+		container.Provide(&BenchAPIService{})
+		container.Provide(&BenchSimpleService{})
+		container.Provide(&BenchMediumService{})
 
-		di.MustBuild()
+		container.Build()
 	}
 }
 
 // Benchmark 6: 并发注入性能
 func BenchmarkInject_Concurrent(b *testing.B) {
-	di.Reset()
-	di.Bind[BenchLogger](&BenchConsoleLogger{})
-	di.Bind[BenchDatabase](&BenchMySQLDB{})
-	di.Bind[BenchCache](&BenchRedisCache{})
-	di.Provide(&BenchMediumService{})
-	di.MustBuild()
+	container := di.NewContainer()
+	di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
+	di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
+	di.BindWith[BenchCache](container, &BenchRedisCache{})
+	container.Provide(&BenchMediumService{})
+	container.Build()
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_ = di.Inject[*BenchMediumService]()
+			var svc *BenchMediumService
+			container.Inject(&svc)
+			_ = svc
 		}
 	})
 }

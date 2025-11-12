@@ -69,19 +69,17 @@ func example1() {
 
 	// 从容器实例注入（使用 Inject）
 	var logger Logger
-	container.MustInject(&logger)
+	container.Inject(&logger)
 	logger.Log("Hello from container instance")
 
-	// 使用 Inject 带错误处理
+	// 注入数据库
 	var db Database
-	if err := container.Inject(&db); err != nil {
-		panic(err)
-	}
+	container.Inject(&db)
 	db.Connect()
 
 	// 注入服务
 	var svc *UserService
-	container.MustInject(&svc)
+	container.Inject(&svc)
 	svc.Logger.Log("UserService initialized")
 	svc.DB.Connect()
 }
@@ -102,10 +100,10 @@ func example2() {
 
 	// 从不同容器获取实例
 	var logger1 Logger
-	container1.MustInject(&logger1)
+	container1.Inject(&logger1)
 
 	var logger2 Logger
-	container2.MustInject(&logger2)
+	container2.Inject(&logger2)
 
 	logger1.Log("From container 1")
 	logger2.Log("From container 2")
@@ -128,36 +126,29 @@ func example3() {
 
 	// 方式1: 使用 var + Inject 注入接口
 	var logger Logger
-	if err := container.Inject(&logger); err != nil {
-		panic(err)
-	}
+	container.Inject(&logger)
 	logger.Log("Injected using var + Inject pattern")
 
 	// 方式2: 使用 var + Inject 注入结构体
 	var svc *UserService
-	if err := container.Inject(&svc); err != nil {
-		panic(err)
-	}
+	container.Inject(&svc)
 	svc.Logger.Log("UserService injected using var + Inject")
 	svc.DB.Connect()
 
-	// 方式3: 使用 MustInject（失败时 panic）
+	// 方式3: 注入数据库
 	var db Database
-	container.MustInject(&db)
+	container.Inject(&db)
 	db.Connect()
 
-	// 演示：两种注入方式对比
-	fmt.Println("\n--- 两种注入方式对比 ---")
+	// 演示：注入方式示例
+	fmt.Println("\n--- 注入方式示例 ---")
 
-	// 方式A: var + Inject（带错误处理）
+	// 使用 var + Inject
 	var logger1 Logger
-	if err := container.Inject(&logger1); err != nil {
-		panic(err)
-	}
-	logger1.Log("方式A: var svc T; container.Inject(&svc)")
+	container.Inject(&logger1)
+	logger1.Log("方式: var svc T; container.Inject(&svc)")
 
-	// 方式B: var + MustInject（简洁）
 	var logger2 Logger
-	container.MustInject(&logger2)
-	logger2.Log("方式B: var svc T; container.MustInject(&svc)")
+	container.Inject(&logger2)
+	logger2.Log("批量注入示例")
 }

@@ -26,22 +26,7 @@ type Application interface {
 	Configuration() config.Configuration
 	Logger() logging.Logger
 	Environment() Environment
-}
-
-// GetService 泛型方法：从应用程序获取服务实例
-//
-// 这是获取服务的推荐方式，提供类型安全且简洁的 API。
-//
-// 使用示例：
-//
-//	service := app.GetService[*MyService](application)
-func GetService[T any](app Application) T {
-	typ := reflect.TypeOf((*T)(nil)).Elem()
-	instance, err := app.Services().GetByType(typ)
-	if err != nil {
-		panic("app: failed to get service " + typ.String() + ": " + err.Error())
-	}
-	return instance.(T)
+	GetService(ptr interface{})
 }
 
 // ApplicationBuilder 应用程序构建器
@@ -394,6 +379,38 @@ func (a *application) Logger() logging.Logger {
 // Environment 获取环境
 func (a *application) Environment() Environment {
 	return a.environment
+}
+
+// GetService 获取服务实例（通过指针参数）
+//
+// 使用示例：
+//
+//	var myService *MyService
+//	app.GetService(&myService)
+func (a *application) GetService(ptr any) {
+	// 检查参数是否为指针
+	ptrValue := reflect.ValueOf(ptr)
+	if ptrValue.Kind() != reflect.Pointer {
+		panic(fmt.Sprintf("app: GetService argument must be a pointer, got %T", ptr))
+	}
+
+	// 获取指针指向的类型
+	elemValue := ptrValue.Elem()
+	if !elemValue.CanSet() {
+		panic("app: GetService argument must be settable")
+	}
+
+	// 获取目标类型
+	targetType := elemValue.Type()
+
+	// 从容器获取服务实例
+	instance, err := a.container.GetByType(targetType)
+	if err != nil {
+		panic(fmt.Sprintf("app: failed to get service %s: %v", targetType.String(), err))
+	}
+
+	// 设置值
+	elemValue.Set(reflect.ValueOf(instance))
 }
 
 // ServiceCollection 服务集合

@@ -47,48 +47,42 @@ func (i Int) Value() int {
 }
 
 func main() {
-	di.Reset()
+	// 创建容器实例
+	container := di.NewContainer()
 
-	// 使用 TypeOf 统一处理接口和具体类型
-	di.ProvideType(di.TypeProvider{
-		Provide: di.TypeOf[Logger](), // 自动检查是否为接口
-		UseType: &ConsoleLogger{Prefix: "APP"},
-	})
-
-	di.ProvideType(di.TypeProvider{
-		Provide: di.TypeOf[Database](), // 自动检查是否为接口
-		UseType: &MySQLDatabase{Host: "localhost", Port: 3306},
-	})
-
-	di.ProvideType(di.TypeProvider{
-		Provide: di.TypeOf[IInt](),
-		UseType: Int(42),
-	})
+	// 使用 BindWith 绑定接口到实现
+	di.BindWith[Logger](container, &ConsoleLogger{Prefix: "APP"})
+	di.BindWith[Database](container, &MySQLDatabase{Host: "localhost", Port: 3306})
+	di.BindWith[IInt](container, Int(42))
 
 	// 注册服务
-	di.Provide(&UserService{})
+	container.Provide(&UserService{})
 
 	// 构建容器
-	di.MustBuild()
+	if err := container.Build(); err != nil {
+		panic(err)
+	}
 
-	// 方式1: 泛型 Inject
-	println("\n=== 方式1: 泛型 Inject ===")
-	svc := di.Inject[*UserService]()
+	// 使用 Inject 获取服务
+	println("\n=== 使用 container.Inject 获取服务 ===")
+	var svc *UserService
+	container.Inject(&svc)
 	svc.Logger.Log("UserService initialized")
 	svc.DB.Connect()
 
-	intVal := di.Inject[IInt]()
+	var intVal IInt
+	container.Inject(&intVal)
 	println("Injected int value:", intVal.Value())
 
-	// 方式2: var + MustInject (推荐用于容器实例)
-	println("\n=== 方式2: var + container.MustInject ===")
-	container := di.GetContainer()
+	// 批量注入示例
+	println("\n=== 批量注入示例 ===")
+	var (
+		logger Logger
+		db     Database
+	)
+	container.Inject(&logger)
+	container.Inject(&db)
 
-	var svc2 *UserService
-	container.MustInject(&svc2)
-	svc2.Logger.Log("UserService injected via MustInject")
-
-	var logger2 Logger
-	container.MustInject(&logger2)
-	logger2.Log("Logger injected via MustInject")
+	logger.Log("Logger injected")
+	db.Connect()
 }

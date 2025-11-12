@@ -36,125 +36,72 @@ type UserService struct {
 }
 
 func main() {
-    // 1. 注册依赖
-    di.Bind[Logger](&ConsoleLogger{})
-    di.Provide(&UserService{})
+    // 1. 创建容器
+    container := di.NewContainer()
     
-    // 2. 构建容器
-    di.MustBuild()
+    // 2. 注册依赖
+    di.BindWith[Logger](container, &ConsoleLogger{})
+    container.Provide(&UserService{})
     
-    // 3. 获取实例
-    svc := di.Inject[*UserService]()
+    // 3. 构建容器
+    container.Build()
+    
+    // 4. 获取实例
+    var svc *UserService
+    container.Inject(&svc)
     svc.Logger.Log("Hello DI!")
 }
 ```
 
 ## 依赖注入方式
 
-框架提供了两种注入方式，可以根据场景选择：
+框架提供了指针注入的方式：
 
-### 方式1: 泛型注入（全局容器）
-
-```go
-// 使用默认容器
-svc := di.Inject[*UserService]()
-
-// 带错误处理
-svc, err := di.TryInject[*UserService]()
-
-// 带默认值
-svc := di.InjectOrDefault[*UserService](defaultSvc)
-```
-
-**优点**：
-- 类型安全，编译时检查
-- 语法简洁，一行完成
-- Go 风格
-
-**适用场景**：使用全局默认容器
-
-### 方式2: 指针注入（容器实例）
+### 指针注入（容器实例）
 
 ```go
 // 创建容器实例
 container := di.NewContainer()
 // ... 注册和构建 ...
 
-// 使用 Inject（带错误处理）
+// 使用 Inject（失败时 panic）
 var svc *UserService
-if err := container.Inject(&svc); err != nil {
-    log.Fatal(err)
-}
+container.Inject(&svc)
 
-// 使用 MustInject（失败时 panic）
+// Inject 不返回错误，失败时会 panic
 var logger Logger
-container.MustInject(&logger)
+container.Inject(&logger)
 ```
 
 **优点**：
 - 传统 DI 容器风格（类似 Java Spring、.NET Core）
 - 适合批量声明变量
-- 支持细粒度错误处理
+- 简洁明了，失败时立即 panic
 
 **适用场景**：使用独立容器实例、测试、多容器隔离
 
-### 两种方式对比
+## 容器使用
 
-```go
-// 方式1: 全局容器 - 泛型注入
-svc1 := di.Inject[*UserService]()
-
-// 方式2: 指针注入
-var svc2 *UserService
-container.MustInject(&svc2)
-```
-
-| 特性 | 泛型注入 | 指针注入 |
-|------|----------|----------|
-| 类型安全 | ✅ 编译时 | ✅ 运行时 |
-| 语法简洁 | ✅ 一行完成 | ⚠️ 需要先声明 |
-| 错误处理 | ⚠️ panic 或返回 | ✅ 灵活 |
-| 适用场景 | 全局容器、单个注入 | 容器实例、批量注入 |
-| 风格 | Go 语言风格 | 传统 DI 风格 |
-
-## 容器实例 vs 全局容器
-
-### 全局容器（推荐用于应用程序）
-
-```go
-// 注册
-di.Bind[Logger](&ConsoleLogger{})
-di.Provide(&UserService{})
-
-// 构建
-di.MustBuild()
-
-// 注入
-svc := di.Inject[*UserService]()
-```
-
-### 独立容器（推荐用于测试和隔离场景）
+### 创建和配置容器
 
 ```go
 // 创建容器
 container := di.NewContainer()
 
-// 注册（使用 With 后缀的方法）
+// 注册服务
 di.BindWith[Logger](container, &ConsoleLogger{})
 container.Provide(&UserService{})
 
 // 构建
 container.Build()
 
-// 注入：使用指针方式
+// 注入：使用 Inject
 var svc *UserService
-container.MustInject(&svc)
+container.Inject(&svc)
 
-// 或带错误处理
+// 批量注入
 var logger Logger
-if err := container.Inject(&logger); err != nil {
-    log.Fatal(err)
-}
+container.Inject(&logger)
 ```
 
 ## 示例
@@ -185,23 +132,30 @@ go run di/examples/container_instance/main.go
 ### 作用域
 
 ```go
-// Singleton（默认）- 全局唯一
-di.ProvideClass(di.ClassProvider{
-    Provide: di.TypeOf[*UserService](),
-    UseClass: NewUserService,
-    Scope: di.Singleton,
+// 注册 Scoped 服务
+container.ProvideWithConfig(di.ProviderConfig{
+    Provide: di.TypeOf[*Repository](),
+    UseClass: NewRepository,
+    Scope: di.ScopeScoped,
 })
 
-// Transient - 每次创建新实例
-di.ProvideClass(di.ClassProvider{
-    Provide: di.TypeOf[*RequestHandler](),
-    UseClass: NewRequestHandler,
-    Scope: di.Transient,
-})
+container.Build()
 
-// Scoped - 作用域内唯一
+// 创建作用域
 scope := container.CreateScope()
 defer scope.Dispose()
+
+// 设置当前作用域
+container.SetCurrentScope(scope)
+defer container.ClearCurrentScope()
+
+// 从作用域注入（与容器一致的优雅语法）
+var repo *Repository
+scope.Inject(&repo)
+
+// 也支持接口注入
+var logger Logger
+scope.Inject(&logger)
 ```
 
 ### Token 机制

@@ -30,7 +30,7 @@ func TestContainerProvide(t *testing.T) {
 	}
 
 	var result *ContainerConsoleLogger
-	container.MustInject(&result)
+	container.Inject(&result)
 	if result.Prefix != "TEST" {
 		t.Errorf("expected prefix 'TEST', got '%s'", result.Prefix)
 	}
@@ -46,7 +46,7 @@ func TestBindWith(t *testing.T) {
 	container.Build()
 
 	var result ContainerLogger
-	container.MustInject(&result)
+	container.Inject(&result)
 	msg := result.Log("test")
 	expected := "BINDWITH: test"
 	if msg != expected {
@@ -63,7 +63,7 @@ func TestInject(t *testing.T) {
 	container.Build()
 
 	var result *ContainerConsoleLogger
-	container.MustInject(&result)
+	container.Inject(&result)
 	if result.Prefix != "INJECT" {
 		t.Errorf("expected prefix 'INJECT', got '%s'", result.Prefix)
 	}
@@ -78,10 +78,13 @@ func TestInjectWithError(t *testing.T) {
 	container.Build()
 
 	var result *ContainerConsoleLogger
-	err := container.Inject(&result)
-	if err != nil {
-		t.Fatalf("Inject failed: %v", err)
-	}
+	// Inject 不再返回错误，改用 panic 测试
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Inject panicked: %v", r)
+		}
+	}()
+	container.Inject(&result)
 	if result.Prefix != "TRY" {
 		t.Errorf("expected prefix 'TRY', got '%s'", result.Prefix)
 	}
@@ -93,10 +96,13 @@ func TestInjectNotFound(t *testing.T) {
 	container.Build()
 
 	var result *ContainerConsoleLogger
-	err := container.Inject(&result)
-	if err == nil {
-		t.Error("expected error when injecting non-existent type")
-	}
+	// Inject 不再返回错误，应该 panic
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic when injecting non-existent type")
+		}
+	}()
+	container.Inject(&result)
 }
 
 // 移除 FromDefault 相关测试，已经不再支持
@@ -118,8 +124,8 @@ func TestMultipleContainerIsolation(t *testing.T) {
 
 	var result1 ContainerLogger
 	var result2 ContainerLogger
-	container1.MustInject(&result1)
-	container2.MustInject(&result2)
+	container1.Inject(&result1)
+	container2.Inject(&result2)
 
 	msg1 := result1.Log("test")
 	msg2 := result2.Log("test")
@@ -129,38 +135,6 @@ func TestMultipleContainerIsolation(t *testing.T) {
 	}
 	if msg2 != "CONTAINER2: test" {
 		t.Errorf("container2: expected 'CONTAINER2: test', got '%s'", msg2)
-	}
-}
-
-// 测试容器实例与全局容器隔离
-func TestContainerInstanceAndGlobalContainerIsolation(t *testing.T) {
-	// 重置全局容器
-	di.Reset()
-
-	// 设置全局容器
-	globalLogger := &ContainerConsoleLogger{Prefix: "GLOBAL"}
-	di.Bind[ContainerLogger](globalLogger)
-	di.MustBuild()
-
-	// 创建独立容器实例
-	container := di.NewContainer()
-	instanceLogger := &ContainerConsoleLogger{Prefix: "INSTANCE"}
-	di.BindWith[ContainerLogger](container, instanceLogger)
-	container.Build()
-
-	// 验证隔离
-	globalResult := di.Inject[ContainerLogger]()
-	var instanceResult ContainerLogger
-	container.MustInject(&instanceResult)
-
-	globalMsg := globalResult.Log("test")
-	instanceMsg := instanceResult.Log("test")
-
-	if globalMsg != "GLOBAL: test" {
-		t.Errorf("global: expected 'GLOBAL: test', got '%s'", globalMsg)
-	}
-	if instanceMsg != "INSTANCE: test" {
-		t.Errorf("instance: expected 'INSTANCE: test', got '%s'", instanceMsg)
 	}
 }
 
@@ -177,7 +151,7 @@ func TestContainerProvideType(t *testing.T) {
 	container.Build()
 
 	var result ContainerLogger
-	container.MustInject(&result)
+	container.Inject(&result)
 	msg := result.Log("test")
 	expected := "PROVIDETYPE: test"
 	if msg != expected {

@@ -60,36 +60,27 @@ func main() {
 	// 方式1: 注入接口
 	fmt.Println("--- 1. 注入接口 ---")
 	var repo UserRepository
-	container.MustInject(&repo)
+	container.Inject(&repo)
 	fmt.Println(repo.GetUserByID(1))
 
 	// 方式2: 注入服务（结构体指针）
 	fmt.Println("\n--- 2. 注入服务 ---")
 	var userSvc *UserService
-	container.MustInject(&userSvc)
+	container.Inject(&userSvc)
 	userSvc.GetUser(2)
 
 	var orderSvc *OrderService
-	container.MustInject(&orderSvc)
+	container.Inject(&orderSvc)
 	orderSvc.CreateOrder(3)
 
-	// 方式3: 使用 Inject 带错误处理
-	fmt.Println("\n--- 3. 带错误处理的注入 ---")
-	var repo2 UserRepository
-	if err := container.Inject(&repo2); err != nil {
-		fmt.Println("注入失败:", err)
-	} else {
-		fmt.Println("注入成功:", repo2.GetUserByID(4))
-	}
-
-	// 方式4: 批量注入多个服务
-	fmt.Println("\n--- 4. 批量注入 ---")
+	// 方式3: 批量注入多个服务
+	fmt.Println("\n--- 3. 批量注入 ---")
 	var (
 		svc1 *UserService
 		svc2 *OrderService
 	)
-	container.MustInject(&svc1)
-	container.MustInject(&svc2)
+	container.Inject(&svc1)
+	container.Inject(&svc2)
 
 	svc1.GetUser(5)
 	svc2.CreateOrder(6)

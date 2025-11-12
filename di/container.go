@@ -1183,23 +1183,6 @@ func (c *Container) GetByType(typ reflect.Type) (any, error) {
 	return c.Get(tk)
 }
 
-// Resolve 泛型方法：获取指定类型的实例（失败时 panic）
-//
-// 这是获取服务实例的推荐方式，提供类型安全且简洁的 API。
-//
-// 使用示例：
-//
-//	service := di.Resolve[*MyService](container)
-//	// 直接使用 service，无需类型断言
-func Resolve[T any](c *Container) T {
-	typ := reflect.TypeOf((*T)(nil)).Elem()
-	instance, err := c.GetByType(typ)
-	if err != nil {
-		panic("DI: failed to resolve " + typ.String() + ": " + err.Error())
-	}
-	return instance.(T)
-}
-
 // Provide 注册值或构造函数到容器实例
 func (c *Container) Provide(value any) {
 	if err := c.register(value); err != nil {
@@ -1336,21 +1319,52 @@ func (s *Scope) GetByType(typ reflect.Type) (any, error) {
 	return s.Get(tk)
 }
 
-// ResolveScoped 泛型方法：从作用域获取指定类型的实例（失败时 panic）
-//
-// 这是从作用域获取服务实例的推荐方式，提供类型安全且简洁的 API。
+// Inject 通过指针注入实例到目标变量（失败时 panic）
 //
 // 使用示例：
 //
-//	service := di.ResolveScoped[*MyService](scope)
-//	// 直接使用 service，无需类型断言
-func ResolveScoped[T any](s *Scope) T {
-	typ := reflect.TypeOf((*T)(nil)).Elem()
-	instance, err := s.GetByType(typ)
-	if err != nil {
-		panic("DI: failed to resolve scoped " + typ.String() + ": " + err.Error())
+//	var svc *UserService
+//	scope.Inject(&svc)
+//
+// 支持 Token 注入：
+//
+//	var svc *UserService
+//	scope.Inject(&svc, token)
+func (s *Scope) Inject(target any, tokenOrNil ...any) {
+	targetVal := reflect.ValueOf(target)
+	if targetVal.Kind() != reflect.Pointer {
+		panic(fmt.Sprintf("Scope.Inject: target must be a pointer, got %v", targetVal.Kind()))
 	}
-	return instance.(T)
+
+	if targetVal.IsNil() {
+		panic("Scope.Inject: target pointer is nil")
+	}
+
+	// 获取指针指向的元素类型
+	elemVal := targetVal.Elem()
+	elemType := elemVal.Type()
+
+	var tk typeKey
+
+	if len(tokenOrNil) > 0 && tokenOrNil[0] != nil {
+		// 使用 Token 注入
+		if token, ok := tokenOrNil[0].(tokenInterface); ok {
+			tk = typeKey{typ: token.Type(), token: token}
+		} else {
+			panic("Scope.Inject: invalid token parameter")
+		}
+	} else {
+		// 按类型注入
+		tk = typeKey{typ: elemType}
+	}
+
+	instance, err := s.Get(tk)
+	if err != nil {
+		panic(fmt.Sprintf("Scope.Inject failed: %v", err))
+	}
+
+	// 设置值
+	elemVal.Set(reflect.ValueOf(instance))
 }
 
 // getInstanceByScope 根据作用域获取或创建实例
