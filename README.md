@@ -117,7 +117,16 @@ builder.Configure(cron.Configure(func(b *cron.Builder) {
 
 ## ⚙️ 配置文件系统
 
-框架提供了强大的配置系统，支持多种配置源和三种配置模式。
+框架提供了强大的配置系统，支持多种配置源和三种配置模式，支持配置热更新和动态重载。
+
+### 目录
+- [配置源](#配置源)
+- [三种配置模式](#三种配置模式)
+- [配置监听与热更新](#配置监听与热更新)
+- [配置键路径](#配置键路径)
+- [配置模式选择指南](#配置模式选择指南)
+- [完整配置示例](#完整配置示例)
+- [最佳实践](#配置最佳实践)
 
 ### 配置源
 
@@ -293,7 +302,116 @@ func (s *FeatureService) IsNewUIEnabled() bool {
 }
 ```
 
-### 完整配置示例
+### 配置监听与热更新
+
+#### 动态配置更新机制
+
+框架支持配置的动态更新，当配置源发生变化时自动重载配置。目前支持动态更新的配置源：
+
+- ✅ **Etcd** - 通过 Watch 机制实时监听配置变更
+- ❌ **JSON/YAML 文件** - 不支持文件监听（静态配置）
+- ❌ **环境变量** - 不支持动态更新（静态配置）
+- ❌ **内存配置** - 不支持动态更新（静态配置）
+
+#### 配置监听开关
+
+框架提供了全局配置监听开关，可以根据环境需求启用或禁用配置监听功能。
+
+**方式一：代码配置（推荐）**
+
+```go
+builder := app.NewApplicationBuilder()
+
+// 禁用配置监听（适合生产环境）
+builder.UseConfigWatch(false)
+
+// 启用配置监听（默认行为）
+builder.UseConfigWatch(true)
+```
+
+**方式二：环境变量配置**
+
+```bash
+# 禁用配置监听
+export APP_CONFIG_WATCH_ENABLED=false
+
+# 启用配置监听（默认）
+export APP_CONFIG_WATCH_ENABLED=true
+```
+
+环境变量优先级高于代码配置。
+
+#### 配置更新流程
+
+当 Etcd 配置发生变更时：
+
+```
+1. Etcd Watch 检测到变更
+         ↓
+2. 触发配置重载 (ReloadableConfiguration.Reload)
+         ↓
+3. 更新所有 OptionsCache 缓存
+         ↓
+4. OptionMonitor.Value() 返回最新值
+```
+
+#### Etcd 配置示例
+
+```go
+// 在 Etcd 中存储配置（键格式：/prefix/path/to/key）
+// /myapp/features/enableNewUI = true
+// /myapp/features/maxConnections = 100
+
+builder.ConfigureConfiguration(func(config *config.ConfigurationBuilder) {
+    config.AddEtcd(config.EtcdOptions{
+        Endpoints: []string{"localhost:2379"},
+        Prefix:    "/myapp/",  // 配置前缀
+    })
+})
+
+// 使用 OptionMonitor 实时获取最新配置
+type FeatureSettings struct {
+    EnableNewUI    bool `json:"enableNewUI"`
+    MaxConnections int  `json:"maxConnections"`
+}
+
+core.AddOptions[FeatureSettings](builder, "features")
+
+// 服务中使用
+type FeatureService struct {
+    features config.OptionMonitor[FeatureSettings]
+}
+
+func (s *FeatureService) Check() {
+    // 总是返回最新配置，即使 Etcd 中的值已更改
+    cfg := s.features.Value()
+    fmt.Printf("New UI: %v, Max: %d\n", cfg.EnableNewUI, cfg.MaxConnections)
+}
+```
+
+#### 配置监听注意事项
+
+⚠️ **重要提示：**
+
+1. **只有 `OptionMonitor[T]` 会实时更新**
+   - `Option[T]` 和 `OptionSnapshot[T]` 不会自动更新
+   
+2. **禁用监听后的行为**
+   - 应用启动时加载配置（一次性）
+   - 不会监听配置变更
+   - 可以手动调用 `Reload()` 方法更新（如果需要）
+
+3. **性能考虑**
+   - 启用监听会维持与 Etcd 的长连接
+   - 每个配置源一个 Watch 连接
+   - 配置变更时会触发全量重载
+
+4. **线程安全**
+   - 所有配置读写都使用读写锁保护
+   - 多个 goroutine 可以安全并发读取
+   - 配置更新时会短暂阻塞读取
+
+### 配置键路径
 
 ```go
 package main
@@ -353,7 +471,23 @@ port, _ := config.GetInt("app:port")
 
 // 获取布尔值
 debug, _ := config.GetBool("app:debug")
+
+// 获取配置节
+section := config.GetSection("database")
+host := section.Get("host")
+
+// 绑定到结构体
+var dbConfig DatabaseSettings
+config.Bind("database", &dbConfig)
 ```
+
+**路径映射规则：**
+
+| Etcd 键 | 配置路径 | JSON 路径 |
+|---------|---------|-----------|
+| `/myapp/app/name` | `app:name` | `app.name` |
+| `/myapp/db/host` | `db:host` | `db.host` |
+| `APP_DB_HOST` (环境变量) | `db:host` | - |
 
 ### 配置模式选择指南
 
@@ -363,7 +497,256 @@ debug, _ := config.GetBool("app:debug")
 | **OptionSnapshot[T]** | Scoped | 每个作用域 | 请求级别的配置快照 |
 | **OptionMonitor[T]** | Singleton | 实时更新 | 功能开关、动态限流等 |
 
----
+**选择建议：**
+
+```go
+// ✅ 使用 Option[T]：配置永不改变
+type ServerConfig struct {
+    Port int    `json:"port"`
+    Host string `json:"host"`
+}
+
+// ✅ 使用 OptionSnapshot[T]：请求级配置隔离
+type RequestConfig struct {
+    Timeout  time.Duration `json:"timeout"`
+    MaxRetry int           `json:"maxRetry"`
+}
+
+// ✅ 使用 OptionMonitor[T]：需要动态更新
+type FeatureFlags struct {
+    EnableBetaFeature bool `json:"enableBetaFeature"`
+    RateLimit         int  `json:"rateLimit"`
+}
+```
+
+### 配置最佳实践
+
+#### 1. 配置分层策略
+
+```go
+builder.ConfigureConfiguration(func(cfg *config.ConfigurationBuilder) {
+    // 基础配置（默认值）
+    cfg.AddJsonFile("appsettings.json")
+    
+    // 环境特定配置（覆盖默认值）
+    cfg.AddJsonFile("appsettings.dev.json", true)
+    cfg.AddJsonFile("appsettings.prod.json", true)
+    
+    // 环境变量（最高优先级）
+    cfg.AddEnvironmentVariables("APP_")
+    
+    // 配置中心（动态配置）
+    cfg.AddEtcd(config.EtcdOptions{
+        Endpoints: []string{"localhost:2379"},
+        Prefix:    "/myapp/",
+    })
+})
+```
+
+#### 2. 敏感信息处理
+
+```go
+// ❌ 不要在代码中硬编码敏感信息
+type DatabaseConfig struct {
+    Password string `json:"password"` // 不要写在 JSON 文件中
+}
+
+// ✅ 使用环境变量
+// export APP_DATABASE_PASSWORD=secret123
+
+// ✅ 或使用 Etcd 加密存储
+// etcdctl put /myapp/database/password "secret123"
+```
+
+#### 3. 配置验证
+
+```go
+type AppSettings struct {
+    Port int    `json:"port"`
+    Host string `json:"host"`
+}
+
+func (s *AppSettings) Validate() error {
+    if s.Port < 1 || s.Port > 65535 {
+        return fmt.Errorf("invalid port: %d", s.Port)
+    }
+    if s.Host == "" {
+        return fmt.Errorf("host is required")
+    }
+    return nil
+}
+
+// 在应用启动时验证
+var settings config.Option[AppSettings]
+application.GetService(&settings)
+if err := settings.Value().Validate(); err != nil {
+    panic(err)
+}
+```
+
+#### 4. 配置变更监控
+
+```go
+// 自定义配置变更处理
+type ConfigWatcher struct {
+    features config.OptionMonitor[FeatureSettings]
+    logger   logging.Logger
+}
+
+func (w *ConfigWatcher) StartMonitoring(ctx context.Context) {
+    ticker := time.NewTicker(5 * time.Second)
+    defer ticker.Stop()
+    
+    lastConfig := w.features.Value()
+    
+    for {
+        select {
+        case <-ticker.C:
+            currentConfig := w.features.Value()
+            if currentConfig != lastConfig {
+                w.logger.Info("Configuration changed",
+                    logging.Field{Key: "old", Value: lastConfig},
+                    logging.Field{Key: "new", Value: currentConfig})
+                lastConfig = currentConfig
+            }
+        case <-ctx.Done():
+            return
+        }
+    }
+}
+```
+
+#### 5. 多环境配置
+
+**方案一：文件后缀**
+```
+appsettings.json          # 默认配置
+appsettings.dev.json      # 开发环境
+appsettings.staging.json  # 预发布环境
+appsettings.prod.json     # 生产环境
+```
+
+```go
+env := os.Getenv("APP_ENV") // dev, staging, prod
+if env == "" {
+    env = "dev"
+}
+
+builder.ConfigureConfiguration(func(cfg *config.ConfigurationBuilder) {
+    cfg.AddJsonFile("appsettings.json")
+    cfg.AddJsonFile(fmt.Sprintf("appsettings.%s.json", env), true)
+})
+```
+
+**方案二：Etcd 前缀**
+```
+/myapp/dev/...      # 开发环境配置
+/myapp/staging/...  # 预发布环境配置
+/myapp/prod/...     # 生产环境配置
+```
+
+```go
+env := os.Getenv("APP_ENV")
+builder.ConfigureConfiguration(func(cfg *config.ConfigurationBuilder) {
+    cfg.AddEtcd(config.EtcdOptions{
+        Endpoints: []string{"localhost:2379"},
+        Prefix:    fmt.Sprintf("/myapp/%s/", env),
+    })
+})
+```
+
+#### 6. 配置性能优化
+
+```go
+// ❌ 避免在热路径频繁调用 Value()
+func (h *RequestHandler) Process() {
+    for i := 0; i < 1000000; i++ {
+        cfg := h.monitor.Value() // 每次都重新获取，性能差
+    }
+}
+
+// ✅ 在循环外获取一次
+func (h *RequestHandler) Process() {
+    cfg := h.monitor.Value()
+    for i := 0; i < 1000000; i++ {
+        // 使用 cfg
+    }
+}
+```
+
+#### 7. 配置调试技巧
+
+```go
+// 打印所有配置（调试用）
+application := builder.Build()
+config := application.Configuration()
+
+// 获取所有配置
+allConfig := config.GetAll()
+fmt.Printf("All Config: %+v\n", allConfig)
+
+// 检查特定配置是否存在
+if val := config.Get("app:debug"); val == "" {
+    fmt.Println("Warning: app:debug not configured")
+}
+```
+
+### 配置常见问题
+
+**Q1: 配置更新后为什么服务没有生效？**
+
+A: 检查是否使用了正确的配置模式：
+- `Option[T]` - 不会更新，只在启动时加载一次 ❌
+- `OptionSnapshot[T]` - 只在作用域创建时更新 ⚠️
+- `OptionMonitor[T]` - 实时更新 ✅
+
+**Q2: 如何在不重启应用的情况下更新配置？**
+
+A: 使用 Etcd + OptionMonitor：
+```go
+// 1. 启用配置监听
+builder.UseConfigWatch(true)
+
+// 2. 使用 Etcd 配置源
+builder.ConfigureConfiguration(func(cfg *config.ConfigurationBuilder) {
+    cfg.AddEtcd(config.EtcdOptions{...})
+})
+
+// 3. 使用 OptionMonitor
+core.AddOptions[MySettings](builder, "mysettings")
+
+// 4. 更新 Etcd 中的配置值
+// etcdctl put /myapp/mysettings/key "newvalue"
+```
+
+**Q3: 配置监听会影响性能吗？**
+
+A: 影响很小：
+- 只在配置变更时触发重载
+- 读取操作使用读写锁，并发读不阻塞
+- 如果担心性能，可以禁用监听并使用静态配置
+
+**Q4: 如何处理配置加载失败？**
+
+A: 框架会在启动时 panic，建议：
+```go
+// 使用可选配置文件
+cfg.AddJsonFile("optional.json", true) // 第二个参数表示可选
+
+// 或提供默认值
+type AppSettings struct {
+    Port int `json:"port"` // 如果未配置，将使用零值
+}
+```
+
+**Q5: 配置文件支持注释吗？**
+
+A: 
+- JSON 不支持注释（标准限制）
+- YAML 支持 `#` 注释 ✅
+- 建议使用 YAML 或在配置结构体中添加文档注释
+
+### 完整配置示例
 
 ##  依赖注入与服务获取
 
@@ -448,7 +831,6 @@ application.GetService(myService)  // ❌ 没有传递地址
 
 ## 📖 详细文档
 
-- [配置系统 (Configuration)](#️-配置文件系统)
 - [Cron 配置模块详细文档](configure/cron/README.md)
 - [Redis 配置模块详细文档](configure/redis/README.md)
 - [ETCD 配置模块详细文档](configure/etcd/README.md)
