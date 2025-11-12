@@ -8,7 +8,7 @@
 go get github.com/gocrud/app
 ```
 
-## 🚀 5 分钟快速上手
+## 🚀 快速上手
 
 ### 第一步：创建最简单的应用
 
@@ -35,38 +35,175 @@ go run main.go
 
 ## 🔴 添加 Redis 缓存
 
+### 配置 Redis
+
 ```go
 import (
     "github.com/gocrud/app/configure/redis"
     redisclient "github.com/redis/go-redis/v9"
 )
 
-// 在 main 函数中添加 Redis 配置
+// 在 main 函数中配置 Redis
 builder.Configure(redis.Configure(func(b *redis.Builder) {
     b.AddClient("default", func(opts *redis.RedisClientOptions) {
         opts.Addr = "localhost:6379"
-        opts.Password = ""
+        opts.Password = ""  // 如果有密码就填写
         opts.DB = 0
     })
 }))
+```
 
-// 在服务中使用 Redis
+### 创建缓存服务
+
+```go
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "time"
+)
+
+// CacheService - 通用缓存服务
 type CacheService struct {
-    redis *redisclient.Client
+    redis *redisclient.Client  // 框架会自动注入
 }
 
+// 构造函数（框架会自动调用并注入依赖）
 func NewCacheService(redis *redisclient.Client) *CacheService {
     return &CacheService{redis: redis}
 }
 
-func (s *CacheService) Set(ctx context.Context, key, value string) error {
-    return s.redis.Set(ctx, key, value, 0).Err()
+// Set 设置缓存
+func (s *CacheService) Set(ctx context.Context, key, value string, expiration time.Duration) error {
+    return s.redis.Set(ctx, key, value, expiration).Err()
 }
 
+// Get 获取缓存
 func (s *CacheService) Get(ctx context.Context, key string) (string, error) {
     return s.redis.Get(ctx, key).Result()
 }
+
+// Delete 删除缓存
+func (s *CacheService) Delete(ctx context.Context, key string) error {
+    return s.redis.Del(ctx, key).Err()
+}
 ```
+
+### 业务服务示例
+
+```go
+// User 用户模型
+type User struct {
+    ID    int    `json:"id"`
+    Name  string `json:"name"`
+    Email string `json:"email"`
+}
+
+// UserService - 使用缓存的用户服务
+type UserService struct {
+    cache *CacheService  // 依赖缓存服务
+}
+
+// 构造函数（框架会自动注入 CacheService）
+func NewUserService(cache *CacheService) *UserService {
+    return &UserService{cache: cache}
+}
+
+// CacheUser 缓存用户数据
+func (s *UserService) CacheUser(ctx context.Context, user *User) error {
+    data, err := json.Marshal(user)
+    if err != nil {
+        return err
+    }
+    
+    key := fmt.Sprintf("user:%d", user.ID)
+    return s.cache.Set(ctx, key, string(data), time.Hour)  // 缓存 1 小时
+}
+
+// GetCachedUser 从缓存获取用户
+func (s *UserService) GetCachedUser(ctx context.Context, userID int) (*User, error) {
+    key := fmt.Sprintf("user:%d", userID)
+    data, err := s.cache.Get(ctx, key)
+    if err != nil {
+        return nil, err
+    }
+    
+    var user User
+    if err := json.Unmarshal([]byte(data), &user); err != nil {
+        return nil, err
+    }
+    return &user, nil
+}
+```
+
+### 注册和使用服务
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    
+    "github.com/gocrud/app"
+    "github.com/gocrud/app/configure/redis"
+    "github.com/gocrud/app/core"
+)
+
+func main() {
+    builder := app.NewApplicationBuilder()
+    
+    // 1. 配置 Redis
+    builder.Configure(redis.Configure(func(b *redis.Builder) {
+        b.AddClient("default", func(opts *redis.RedisClientOptions) {
+            opts.Addr = "localhost:6379"
+        })
+    }))
+    
+    // 2. 注册服务（框架会自动处理依赖注入）
+    builder.ConfigureServices(func(services *core.ServiceCollection) {
+        services.AddSingleton(NewCacheService)  // 注册缓存服务
+        services.AddSingleton(NewUserService)   // 注册用户服务（依赖 CacheService）
+    })
+    
+    application := builder.Build()
+    
+    // 3. 获取并使用服务
+    var userService *UserService
+    application.GetService(&userService)
+    
+    ctx := context.Background()
+    
+    // 缓存用户
+    user := &User{ID: 1, Name: "Alice", Email: "alice@example.com"}
+    userService.CacheUser(ctx, user)
+    
+    // 从缓存获取
+    cachedUser, _ := userService.GetCachedUser(ctx, 1)
+    fmt.Printf("从缓存获取: %+v\n", cachedUser)
+    
+    application.Run()
+}
+```
+
+### 依赖注入说明
+
+框架会自动处理依赖注入：
+
+```
+1. Redis 客户端由框架创建并注册到容器
+         ↓
+2. NewCacheService(redis) 被调用，框架自动注入 redis 参数
+         ↓
+3. NewUserService(cache) 被调用，框架自动注入 cache 参数
+         ↓
+4. UserService 可以直接使用 CacheService
+```
+
+**关键点：**
+- ✅ 构造函数参数会被自动注入（按类型匹配）
+- ✅ 注册顺序无关紧要，框架会自动解析依赖关系
+- ✅ 使用 `AddSingleton` 注册单例服务（整个应用共享一个实例）
 
 ---
 
