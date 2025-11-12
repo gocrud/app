@@ -152,13 +152,13 @@ func main() {
     
     // 注册服务
     builder.ConfigureServices(func(services *di.ServiceCollection) {
-        services.AddSingleton(di.Provide(func(logger logging.Logger) *EmailService {
+        services.AddSingleton(func(logger logging.Logger) *EmailService {
             return &EmailService{logger: logger}
-        }))
+        })
         
-        services.AddSingleton(di.Provide(func() *CacheService {
+        services.AddSingleton(func() *CacheService {
             return &CacheService{}
-        }))
+        })
     })
     
     // 配置定时任务

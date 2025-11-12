@@ -198,7 +198,7 @@ application.GetService(myService)  // ❌ 没有传递地址
 
 ## 📖 详细文档
 
-- [CRON 配置模块详细文档](configure/cron/README.md)
+- [Cron 配置模块详细文档](configure/cron/README.md)
 - [Redis 配置模块详细文档](configure/redis/README.md)
 - [ETCD 配置模块详细文档](configure/etcd/README.md)
 
