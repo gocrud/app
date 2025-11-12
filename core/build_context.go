@@ -18,7 +18,7 @@ type Configurator func(*BuildContext)
 // 提供给配置器的上下文环境，包含容器、配置、日志等核心组件
 type BuildContext struct {
 	// container DI 容器
-	container *di.Container
+	container di.Container
 
 	// configuration 配置对象
 	configuration config.Configuration
@@ -78,7 +78,7 @@ func (c *BuildContext) ResolveService(serviceType any) (any, error) {
 
 // GetContainer 获取 DI 容器（已废弃：请使用 Provide 系列方法）
 // Deprecated: 直接访问容器可能导致误用，请使用 Provide/ProvideValue/ProvideType/ProvideWithConfig
-func (c *BuildContext) GetContainer() *di.Container {
+func (c *BuildContext) GetContainer() di.Container {
 	return c.container
 }
 

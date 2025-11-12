@@ -15,7 +15,7 @@ import (
 //
 //	var svc *UserService
 //	c.Inject(&svc, token)
-func (c *Container) Inject(target any, tokenOrNil ...any) {
+func (c *container) Inject(target any, tokenOrNil ...any) {
 	targetVal := reflect.ValueOf(target)
 	if targetVal.Kind() != reflect.Pointer {
 		panic(fmt.Sprintf("Inject: target must be a pointer, got %v", targetVal.Kind()))

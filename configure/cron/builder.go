@@ -115,7 +115,7 @@ func (b *Builder) build(ctx *core.BuildContext, logger logging.Logger) (hosting.
 }
 
 // wrapHandlerWithDI 包装处理器，注入依赖
-func (b *Builder) wrapHandlerWithDI(container *di.Container, logger logging.Logger, handler any) (func(), error) {
+func (b *Builder) wrapHandlerWithDI(container di.Container, logger logging.Logger, handler any) (func(), error) {
 	handlerValue := reflect.ValueOf(handler)
 	handlerType := handlerValue.Type()
 

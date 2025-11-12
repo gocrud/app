@@ -22,7 +22,7 @@ type Application interface {
 	Run() error
 	RunAsync(ctx context.Context) error
 	Stop(ctx context.Context) error
-	Services() *di.Container
+	Services() di.Container
 	Configuration() config.Configuration
 	Logger() logging.Logger
 	Environment() Environment
@@ -251,7 +251,7 @@ func (b *ApplicationBuilder) Build() Application {
 
 // application 应用程序实现
 type application struct {
-	container       *di.Container
+	container       di.Container
 	configuration   config.Configuration
 	logger          logging.Logger
 	environment     Environment
@@ -362,7 +362,7 @@ func (a *application) Stop(ctx context.Context) error {
 }
 
 // Services 获取服务容器
-func (a *application) Services() *di.Container {
+func (a *application) Services() di.Container {
 	return a.container
 }
 
@@ -415,7 +415,7 @@ func (a *application) GetService(ptr any) {
 
 // ServiceCollection 服务集合
 type ServiceCollection struct {
-	container              *di.Container
+	container              di.Container
 	logger                 logging.Logger
 	hostedServiceProviders []any // 存储构造函数或实例
 }

@@ -7,7 +7,61 @@ import (
 	"sync/atomic"
 )
 
-// Container DI容器，管理所有依赖的注册、构建和获取
+// Container DI容器接口，对外暴露依赖注入方法
+//
+// Container提供以下核心功能：
+//   - 依赖注册：支持多种注册方式（类型绑定、值、工厂、别名）
+//   - 依赖解析：自动解析构造函数参数和字段注入
+//   - 生命周期管理：支持 Singleton、Transient、Scoped 三种作用域
+//   - 并发安全：所有操作都是线程安全的
+//
+// 使用流程：
+//  1. 创建容器：container := di.NewContainer()
+//  2. 注册服务：container.Provide(...)
+//  3. 构建容器：container.Build()
+//  4. 获取实例：instance, _ := container.Get(...)
+type Container interface {
+	// Provide 注册值或构造函数到容器
+	Provide(value any)
+
+	// ProvideType 使用类型提供者注册到容器
+	ProvideType(provider TypeProvider)
+
+	// ProvideValue 使用值提供者注册到容器
+	ProvideValue(provider ValueProvider)
+
+	// ProvideFactory 使用工厂提供者注册到容器
+	ProvideFactory(provider FactoryProvider)
+
+	// ProvideExisting 使用别名提供者注册到容器
+	ProvideExisting(provider ExistingProvider)
+
+	// ProvideWithConfig 使用 ProviderConfig 注册到容器（支持完整配置）
+	ProvideWithConfig(config ProviderConfig)
+
+	// Build 构建容器，预解析所有依赖并创建单例实例
+	Build() error
+
+	// GetByType 通过类型获取实例
+	GetByType(typ reflect.Type) (any, error)
+
+	// Inject 通过指针注入实例到目标变量
+	Inject(target any, tokenOrNil ...any)
+
+	// CreateScope 创建一个新的作用域
+	CreateScope() *Scope
+
+	// SetCurrentScope 设置当前作用域
+	SetCurrentScope(scope *Scope)
+
+	// GetCurrentScope 获取当前作用域
+	GetCurrentScope() *Scope
+
+	// ClearCurrentScope 清除当前作用域
+	ClearCurrentScope()
+}
+
+// container DI容器内部实现，管理所有依赖的注册、构建和获取
 //
 // 容器提供以下核心功能：
 //   - 依赖注册：支持多种注册方式（类型绑定、值、工厂、别名）
@@ -21,7 +75,7 @@ import (
 //  2. 注册服务：container.Provide(...)
 //  3. 构建容器：container.Build()
 //  4. 获取实例：instance, _ := container.Get(...)
-type Container struct {
+type container struct {
 	mu           sync.RWMutex              // 读写锁，保护容器状态
 	providers    map[typeKey]*providerInfo // 类型到提供者的映射
 	instances    map[typeKey]any           // 已构建的单例实例缓存
@@ -44,7 +98,7 @@ type Container struct {
 //	defer scope.Dispose()  // 确保释放资源
 //	instance, _ := scope.GetByType(someType)
 type Scope struct {
-	parent    *Container      // 父容器引用
+	parent    *container      // 父容器引用
 	instances map[typeKey]any // 作用域内的实例缓存
 	mu        sync.RWMutex    // 作用域锁
 	disposed  atomic.Bool     // 是否已释放标志
@@ -88,8 +142,8 @@ type fieldInjectInfo struct {
 //
 // 返回一个空的容器实例，需要通过 Provide 系列方法注册依赖，
 // 然后调用 Build() 完成构建后才能使用 Get 获取实例。
-func NewContainer() *Container {
-	return &Container{
+func NewContainer() Container {
+	return &container{
 		providers:   make(map[typeKey]*providerInfo),
 		instances:   make(map[typeKey]any),
 		resolveData: make(map[typeKey]*resolveInfo),
@@ -97,7 +151,7 @@ func NewContainer() *Container {
 }
 
 // register 注册提供者（保留向后兼容）
-func (c *Container) register(value any) error {
+func (c *container) register(value any) error {
 	// 如果传入的是构造函数，自动使用其首个返回值类型作为提供类型
 	if value != nil {
 		val := reflect.ValueOf(value)
@@ -122,7 +176,7 @@ func (c *Container) register(value any) error {
 }
 
 // registerWithConfig 使用 ProviderConfig 注册提供者
-func (c *Container) registerWithConfig(config ProviderConfig) error {
+func (c *container) registerWithConfig(config ProviderConfig) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -236,7 +290,7 @@ func (c *Container) registerWithConfig(config ProviderConfig) error {
 
 // validateScopeDependencies 验证作用域依赖的合法性
 // 规则：Singleton 不能依赖 Transient 或 Scoped（会导致单例持有短生命周期对象）
-func (c *Container) validateScopeDependencies() error {
+func (c *container) validateScopeDependencies() error {
 	for tk, info := range c.providers {
 		// 只检查 Singleton 的依赖
 		if info.scope != ScopeSingleton {
@@ -348,13 +402,15 @@ func (c *Container) validateScopeDependencies() error {
 // 如果构建失败，返回详细的错误信息。
 // 构建成功后，容器状态变为已构建，不能再注册新的依赖。
 //
-// 线程安全：可以从多个 goroutine 调用，但只会构建一次。
-func (c *Container) Build() error {
+// 幂等性：可以安全地多次调用，只会在第一次调用时执行构建，后续调用直接返回 nil。
+// 线程安全：可以从多个 goroutine 并发调用。
+func (c *container) Build() error {
 	c.buildMu.Lock()
 	defer c.buildMu.Unlock()
 
+	// 如果已经构建过，直接返回成功（幂等性）
 	if c.built.Load() {
-		return fmt.Errorf("Build() already called")
+		return nil
 	}
 
 	c.mu.Lock()
@@ -399,7 +455,7 @@ func (c *Container) Build() error {
 
 // validateDependencies 验证依赖关系（不创建实例）
 // 递归检查所有依赖是否可解析，并检测循环依赖
-func (c *Container) validateDependencies(tk typeKey, info *providerInfo, building map[typeKey]bool) error {
+func (c *container) validateDependencies(tk typeKey, info *providerInfo, building map[typeKey]bool) error {
 	// 检查循环依赖
 	if building[tk] {
 		return fmt.Errorf("circular dependency detected for type %v", tk.typ)
@@ -462,7 +518,7 @@ func (c *Container) validateDependencies(tk typeKey, info *providerInfo, buildin
 }
 
 // buildInstance 构建单个实例（递归解析依赖）
-func (c *Container) buildInstance(tk typeKey, info *providerInfo, building map[typeKey]bool) (any, error) {
+func (c *container) buildInstance(tk typeKey, info *providerInfo, building map[typeKey]bool) (any, error) {
 	// 检查是否已构建
 	if resolveInfo, exists := c.resolveData[tk]; exists && resolveInfo.isConstructed {
 		return resolveInfo.instance, nil
@@ -536,7 +592,7 @@ func (c *Container) buildInstance(tk typeKey, info *providerInfo, building map[t
 }
 
 // createTransientInstance 创建瞬态实例（不缓存）
-func (c *Container) createTransientInstance(tk typeKey, info *providerInfo) (any, error) {
+func (c *container) createTransientInstance(tk typeKey, info *providerInfo) (any, error) {
 	var instance any
 	var err error
 
@@ -588,7 +644,7 @@ func (c *Container) createTransientInstance(tk typeKey, info *providerInfo) (any
 
 // topologicalSort 拓扑排序，返回最优构建顺序
 // 无依赖的类型排在前面，减少递归深度
-func (c *Container) topologicalSort() ([]typeKey, error) {
+func (c *container) topologicalSort() ([]typeKey, error) {
 	// 计算每个类型的依赖数量
 	dependencyCount := make(map[typeKey]int)
 	dependents := make(map[typeKey][]typeKey) // 记录依赖关系
@@ -685,7 +741,7 @@ func (c *Container) topologicalSort() ([]typeKey, error) {
 }
 
 // invokeConstructor 调用构造函数
-func (c *Container) invokeConstructor(info *providerInfo, building map[typeKey]bool) (any, error) {
+func (c *container) invokeConstructor(info *providerInfo, building map[typeKey]bool) (any, error) {
 	fn := reflect.ValueOf(info.value)
 
 	// 解析所有参数
@@ -737,7 +793,7 @@ func (c *Container) invokeConstructor(info *providerInfo, building map[typeKey]b
 }
 
 // invokeConstructorTransient 调用构造函数（用于瞬态实例）
-func (c *Container) invokeConstructorTransient(info *providerInfo) (any, error) {
+func (c *container) invokeConstructorTransient(info *providerInfo) (any, error) {
 	fn := reflect.ValueOf(info.value)
 
 	// 解析所有参数
@@ -788,7 +844,7 @@ func (c *Container) invokeConstructorTransient(info *providerInfo) (any, error) 
 }
 
 // invokeFactory 调用工厂函数
-func (c *Container) invokeFactory(info *providerInfo, building map[typeKey]bool) (any, error) {
+func (c *container) invokeFactory(info *providerInfo, building map[typeKey]bool) (any, error) {
 	fn := reflect.ValueOf(info.value)
 
 	var args []reflect.Value
@@ -857,7 +913,7 @@ func (c *Container) invokeFactory(info *providerInfo, building map[typeKey]bool)
 }
 
 // invokeFactoryTransient 调用工厂函数（用于瞬态实例）
-func (c *Container) invokeFactoryTransient(info *providerInfo) (any, error) {
+func (c *container) invokeFactoryTransient(info *providerInfo) (any, error) {
 	fn := reflect.ValueOf(info.value)
 
 	var args []reflect.Value
@@ -926,7 +982,7 @@ func (c *Container) invokeFactoryTransient(info *providerInfo) (any, error) {
 }
 
 // resolveFieldInjections 解析字段注入信息
-func (c *Container) resolveFieldInjections(instance any, building map[typeKey]bool) ([]fieldInjectInfo, error) {
+func (c *container) resolveFieldInjections(instance any, building map[typeKey]bool) ([]fieldInjectInfo, error) {
 	val := reflect.ValueOf(instance)
 	// 检查nil指针
 	if val.Kind() == reflect.Ptr {
@@ -993,7 +1049,7 @@ func (c *Container) resolveFieldInjections(instance any, building map[typeKey]bo
 }
 
 // resolveFieldInjectionsTransient 解析字段注入信息（用于瞬态实例）
-func (c *Container) resolveFieldInjectionsTransient(instance any) ([]fieldInjectInfo, error) {
+func (c *container) resolveFieldInjectionsTransient(instance any) ([]fieldInjectInfo, error) {
 	val := reflect.ValueOf(instance)
 	// 检查nil指针
 	if val.Kind() == reflect.Ptr {
@@ -1051,7 +1107,7 @@ func (c *Container) resolveFieldInjectionsTransient(instance any) ([]fieldInject
 }
 
 // performFieldInjections 执行字段注入
-func (c *Container) performFieldInjections(instance any, fieldInjects []fieldInjectInfo) error {
+func (c *container) performFieldInjections(instance any, fieldInjects []fieldInjectInfo) error {
 	if len(fieldInjects) == 0 {
 		return nil
 	}
@@ -1101,7 +1157,7 @@ func (c *Container) performFieldInjections(instance any, fieldInjects []fieldInj
 }
 
 // Get 获取实例（Build后调用，根据作用域返回实例）
-func (c *Container) Get(tk typeKey) (any, error) {
+func (c *container) Get(tk typeKey) (any, error) {
 	if !c.built.Load() {
 		return nil, fmt.Errorf("must call Build() before Get()")
 	}
@@ -1118,7 +1174,7 @@ func (c *Container) Get(tk typeKey) (any, error) {
 }
 
 // getInstanceByScope 根据作用域获取或创建实例
-func (c *Container) getInstanceByScope(tk typeKey, info *providerInfo) (any, error) {
+func (c *container) getInstanceByScope(tk typeKey, info *providerInfo) (any, error) {
 	// 如果 info 为 nil，则从 providers 中查找
 	if info == nil {
 		c.mu.RLock()
@@ -1135,7 +1191,7 @@ func (c *Container) getInstanceByScope(tk typeKey, info *providerInfo) (any, err
 }
 
 // getInstanceByScopeInternal 内部方法，不获取 providers 锁（假设调用者已持有锁或不需要锁）
-func (c *Container) getInstanceByScopeInternal(tk typeKey, info *providerInfo) (any, error) {
+func (c *container) getInstanceByScopeInternal(tk typeKey, info *providerInfo) (any, error) {
 	switch info.scope {
 	case ScopeSingleton:
 		// 单例：从缓存读取
@@ -1161,7 +1217,7 @@ func (c *Container) getInstanceByScopeInternal(tk typeKey, info *providerInfo) (
 }
 
 // getScopedInstance 获取作用域实例
-func (c *Container) getScopedInstance(tk typeKey, info *providerInfo) (any, error) {
+func (c *container) getScopedInstance(tk typeKey, info *providerInfo) (any, error) {
 	// 获取当前作用域
 	scope := c.GetCurrentScope()
 
@@ -1178,48 +1234,48 @@ func (c *Container) getScopedInstance(tk typeKey, info *providerInfo) (any, erro
 }
 
 // GetByType 通过类型获取实例（公开方法）
-func (c *Container) GetByType(typ reflect.Type) (any, error) {
+func (c *container) GetByType(typ reflect.Type) (any, error) {
 	tk := typeKey{typ: typ}
 	return c.Get(tk)
 }
 
 // Provide 注册值或构造函数到容器实例
-func (c *Container) Provide(value any) {
+func (c *container) Provide(value any) {
 	if err := c.register(value); err != nil {
 		panic("Container.Provide failed: " + err.Error())
 	}
 }
 
 // ProvideType 使用类型提供者注册到容器实例
-func (c *Container) ProvideType(provider TypeProvider) {
+func (c *container) ProvideType(provider TypeProvider) {
 	if err := c.registerWithConfig(*provider.toProviderConfig()); err != nil {
 		panic("Container.ProvideType failed: " + err.Error())
 	}
 }
 
 // ProvideValue 使用值提供者注册到容器实例
-func (c *Container) ProvideValue(provider ValueProvider) {
+func (c *container) ProvideValue(provider ValueProvider) {
 	if err := c.registerWithConfig(*provider.toProviderConfig()); err != nil {
 		panic("Container.ProvideValue failed: " + err.Error())
 	}
 }
 
 // ProvideFactory 使用工厂提供者注册到容器实例
-func (c *Container) ProvideFactory(provider FactoryProvider) {
+func (c *container) ProvideFactory(provider FactoryProvider) {
 	if err := c.registerWithConfig(*provider.toProviderConfig()); err != nil {
 		panic("Container.ProvideFactory failed: " + err.Error())
 	}
 }
 
 // ProvideExisting 使用别名提供者注册到容器实例
-func (c *Container) ProvideExisting(provider ExistingProvider) {
+func (c *container) ProvideExisting(provider ExistingProvider) {
 	if err := c.registerWithConfig(*provider.toProviderConfig()); err != nil {
 		panic("Container.ProvideExisting failed: " + err.Error())
 	}
 }
 
 // ProvideWithConfig 使用 ProviderConfig 注册到容器实例（支持完整配置）
-func (c *Container) ProvideWithConfig(config ProviderConfig) {
+func (c *container) ProvideWithConfig(config ProviderConfig) {
 	if err := c.registerWithConfig(config); err != nil {
 		panic("Container.ProvideWithConfig failed: " + err.Error())
 	}
@@ -1238,7 +1294,7 @@ func (c *Container) ProvideWithConfig(config ProviderConfig) {
 //	service, _ := scope.GetByType(reflect.TypeOf((*Service)(nil)))
 //
 // 注意：必须在 Build() 之后调用，否则会 panic。
-func (c *Container) CreateScope() *Scope {
+func (c *container) CreateScope() *Scope {
 	if !c.built.Load() {
 		panic("Cannot create scope before Build() is called")
 	}
@@ -1259,7 +1315,7 @@ func (c *Container) CreateScope() *Scope {
 //   - Goroutine 本地存储：每个 goroutine 有独立的作用域
 //
 // 注意：在并发场景中需要特别小心，确保不同请求/任务的作用域不会混淆。
-func (c *Container) SetCurrentScope(scope *Scope) {
+func (c *container) SetCurrentScope(scope *Scope) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.currentScope = scope
@@ -1268,7 +1324,7 @@ func (c *Container) SetCurrentScope(scope *Scope) {
 // GetCurrentScope 获取当前作用域
 //
 // 返回通过 SetCurrentScope 设置的作用域，如果没有设置则返回 nil。
-func (c *Container) GetCurrentScope() *Scope {
+func (c *container) GetCurrentScope() *Scope {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.currentScope
@@ -1277,7 +1333,7 @@ func (c *Container) GetCurrentScope() *Scope {
 // ClearCurrentScope 清除当前作用域
 //
 // 在请求或任务结束后调用，清理作用域引用。
-func (c *Container) ClearCurrentScope() {
+func (c *container) ClearCurrentScope() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.currentScope = nil
