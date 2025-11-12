@@ -96,3 +96,43 @@ func (c *BuildContext) GetConfiguration() config.Configuration {
 func (c *BuildContext) GetEnvironment() Environment {
 	return c.environment
 }
+
+// ConfigureOptions 配置选项模式（支持静态、快照和监听三种模式）
+// T: 配置类型
+// section: 配置节名称（例如 "app", "database"）
+// 使用示例: ctx.ConfigureOptions[AppSetting]("app")
+func ConfigureOptions[T any](ctx *BuildContext, section string) {
+	// 创建 OptionsCache
+	cache := config.NewOptionsCache[T](ctx.configuration, section)
+
+	// 注册 Option[T] - Singleton（应用生命周期内不变）
+	ctx.ProvideValue(di.ValueProvider{
+		Provide: di.TypeOf[config.Option[T]](),
+		Value:   config.NewOption[T](cache.Get()),
+		Options: di.ProviderOptions{
+			Scope: di.ScopeSingleton,
+		},
+	})
+
+	// 注册 OptionMonitor[T] - Singleton（实时更新，框架自动处理）
+	ctx.ProvideValue(di.ValueProvider{
+		Provide: di.TypeOf[config.OptionMonitor[T]](),
+		Value:   config.NewOptionMonitor[T](cache),
+		Options: di.ProviderOptions{
+			Scope: di.ScopeSingleton,
+		},
+	})
+
+	// 注册 OptionSnapshot[T] - Scoped（每个作用域创建时的快照）
+	ctx.ProvideWithConfig(di.ProviderConfig{
+		Provide: di.TypeOf[config.OptionSnapshot[T]](),
+		UseClass: func() config.OptionSnapshot[T] {
+			return config.NewOptionSnapshot[T](cache.Snapshot())
+		},
+		Scope: di.ScopeScoped,
+	})
+
+	ctx.logger.Info("Configured options",
+		logging.Field{Key: "type", Value: di.TypeOf[T]().String()},
+		logging.Field{Key: "section", Value: section})
+}

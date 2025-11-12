@@ -105,6 +105,14 @@ func (b *ApplicationBuilder) Configure(configurators ...interface{}) *Applicatio
 	return b
 }
 
+// AddOptions 注册配置选项（语法糖，简化配置选项注册）
+// 使用示例: core.AddOptions[AppSetting](builder, "app")
+func AddOptions[T any](b *ApplicationBuilder, section string) *ApplicationBuilder {
+	return b.Configure(func(ctx *BuildContext) {
+		ConfigureOptions[T](ctx, section)
+	})
+}
+
 // UseShutdownTimeout 设置关闭超时
 func (b *ApplicationBuilder) UseShutdownTimeout(timeout time.Duration) *ApplicationBuilder {
 	b.mu.Lock()
@@ -118,8 +126,8 @@ func (b *ApplicationBuilder) Build() Application {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// 构建配置
-	configuration, err := b.configBuilder.Build()
+	// 构建可重载的配置
+	reloadableConfig, err := b.configBuilder.BuildReloadable()
 	if err != nil {
 		panic(fmt.Sprintf("Failed to build configuration: %v", err))
 	}
@@ -135,9 +143,14 @@ func (b *ApplicationBuilder) Build() Application {
 	container := di.NewContainer()
 
 	// 注册核心服务到容器（按接口类型注册）
+	// 同时注册为 Configuration 接口和 ReloadableConfiguration 具体类型
 	container.ProvideValue(di.ValueProvider{
 		Provide: di.TypeOf[config.Configuration](),
-		Value:   configuration,
+		Value:   reloadableConfig,
+	})
+	container.ProvideValue(di.ValueProvider{
+		Provide: di.TypeOf[*config.ReloadableConfiguration](),
+		Value:   reloadableConfig,
 	})
 	container.ProvideValue(di.ValueProvider{
 		Provide: di.TypeOf[logging.LoggerFactory](),
@@ -162,7 +175,7 @@ func (b *ApplicationBuilder) Build() Application {
 	// 创建 BuildContext
 	buildContext := &BuildContext{
 		container:      container,
-		configuration:  configuration,
+		configuration:  reloadableConfig,
 		logger:         logger,
 		environment:    NewEnvironment(b.environment),
 		hostedServices: make([]hosting.HostedService, 0),
@@ -237,7 +250,8 @@ func (b *ApplicationBuilder) Build() Application {
 	// 创建应用程序
 	app := &application{
 		container:       container,
-		configuration:   configuration,
+		configuration:   reloadableConfig,
+		configBuilder:   b.configBuilder,
 		logger:          logger,
 		environment:     NewEnvironment(b.environment),
 		hostedServices:  injectedServices,
@@ -252,7 +266,8 @@ func (b *ApplicationBuilder) Build() Application {
 // application 应用程序实现
 type application struct {
 	container       di.Container
-	configuration   config.Configuration
+	configuration   *config.ReloadableConfiguration
+	configBuilder   *config.ConfigurationBuilder
 	logger          logging.Logger
 	environment     Environment
 	hostedServices  []hosting.HostedService
@@ -286,6 +301,25 @@ func (a *application) RunAsync(ctx context.Context) error {
 
 	a.logger.Info("Starting application",
 		logging.Field{Key: "environment", Value: a.environment.Name()})
+
+	// 启动配置源的监听（框架自动处理）
+	sources := a.configBuilder.GetSources()
+
+	for _, source := range sources {
+		if err := source.StartWatch(a.runCtx, func() {
+			// 配置源变更时，触发 Configuration 重载
+			if err := a.configuration.Reload(); err != nil {
+				a.logger.Error("Failed to reload configuration",
+					logging.Field{Key: "error", Value: err.Error()})
+			} else {
+				a.logger.Info("Configuration reloaded successfully")
+			}
+		}); err != nil {
+			a.logger.Warn("Failed to start config watch",
+				logging.Field{Key: "source", Value: source.Name()},
+				logging.Field{Key: "error", Value: err.Error()})
+		}
+	}
 
 	// 创建托管服务管理器
 	a.serviceManager = hosting.NewHostedServiceManager(a.logger)
@@ -334,6 +368,13 @@ func (a *application) RunAsync(ctx context.Context) error {
 
 	// 等待所有服务完成
 	a.serviceManager.Wait()
+
+	// 停止配置监听
+	a.logger.Info("Stopping configuration watches")
+	configSources := a.configBuilder.GetSources()
+	for _, source := range configSources {
+		source.StopWatch()
+	}
 
 	// 执行所有清理函数
 	if len(a.cleanups) > 0 {

@@ -115,6 +115,256 @@ builder.Configure(cron.Configure(func(b *cron.Builder) {
 
 ---
 
+## ⚙️ 配置文件系统
+
+框架提供了强大的配置系统，支持多种配置源和三种配置模式。
+
+### 配置源
+
+支持以下配置源，按加载顺序后面的会覆盖前面的：
+
+#### 1. JSON 文件
+```go
+builder.ConfigureConfiguration(func(config *config.ConfigurationBuilder) {
+    config.AddJsonFile("appsettings.json")         // 必需的配置文件
+    config.AddJsonFile("appsettings.dev.json", true) // 可选的配置文件
+})
+```
+
+**appsettings.json 示例：**
+```json
+{
+  "app": {
+    "name": "MyApp",
+    "port": 8080,
+    "debug": true
+  },
+  "database": {
+    "host": "localhost",
+    "port": 5432,
+    "name": "mydb"
+  }
+}
+```
+
+#### 2. YAML 文件
+```go
+builder.ConfigureConfiguration(func(config *config.ConfigurationBuilder) {
+    config.AddYamlFile("config.yaml")
+    config.AddYamlFile("config.dev.yaml", true)
+})
+```
+
+**config.yaml 示例：**
+```yaml
+app:
+  name: MyApp
+  port: 8080
+  debug: true
+
+database:
+  host: localhost
+  port: 5432
+  name: mydb
+```
+
+#### 3. 环境变量
+```go
+builder.ConfigureConfiguration(func(config *config.ConfigurationBuilder) {
+    // 使用前缀 APP_ 的环境变量
+    // 例如: APP_DATABASE_HOST -> database:host
+    config.AddEnvironmentVariables("APP_")
+})
+```
+
+#### 4. 内存配置
+```go
+builder.ConfigureConfiguration(func(config *config.ConfigurationBuilder) {
+    config.AddInMemory(map[string]any{
+        "app": map[string]any{
+            "name": "MyApp",
+            "port": 8080,
+        },
+    })
+})
+```
+
+#### 5. Etcd 配置中心（支持动态更新）
+```go
+builder.ConfigureConfiguration(func(config *config.ConfigurationBuilder) {
+    config.AddEtcd(config.EtcdOptions{
+        Endpoints: []string{"localhost:2379"},
+        Prefix:    "/myapp/",
+        Username:  "admin",    // 可选
+        Password:  "password", // 可选
+    })
+})
+```
+
+### 三种配置模式
+
+#### 1. Option[T] - 静态配置（应用生命周期内不变）
+
+适用场景：应用启动时加载一次，之后不会改变的配置。
+
+```go
+// 定义配置结构
+type AppSettings struct {
+    Name  string `json:"name"`
+    Port  int    `json:"port"`
+    Debug bool   `json:"debug"`
+}
+
+// 注册配置选项
+core.AddOptions[AppSettings](builder, "app")
+
+// 在服务中使用
+type MyService struct {
+    settings config.Option[AppSettings]
+}
+
+func NewMyService(settings config.Option[AppSettings]) *MyService {
+    return &MyService{settings: settings}
+}
+
+func (s *MyService) PrintConfig() {
+    cfg := s.settings.Value()
+    fmt.Printf("App: %s, Port: %d\n", cfg.Name, cfg.Port)
+}
+```
+
+#### 2. OptionSnapshot[T] - 快照配置（作用域内不变）
+
+适用场景：每个请求/作用域使用配置快照，同一作用域内保持一致。
+
+```go
+// 定义配置结构
+type DatabaseSettings struct {
+    Host     string `json:"host"`
+    Port     int    `json:"port"`
+    Database string `json:"database"`
+}
+
+// 注册配置选项
+core.AddOptions[DatabaseSettings](builder, "database")
+
+// 在 Scoped 服务中使用
+type RequestHandler struct {
+    dbConfig config.OptionSnapshot[DatabaseSettings]
+}
+
+func NewRequestHandler(dbConfig config.OptionSnapshot[DatabaseSettings]) *RequestHandler {
+    return &RequestHandler{dbConfig: dbConfig}
+}
+
+func (h *RequestHandler) Process() {
+    cfg := h.dbConfig.Value()
+    // 同一请求中多次调用 Value() 返回相同的快照
+    fmt.Printf("DB: %s:%d/%s\n", cfg.Host, cfg.Port, cfg.Database)
+}
+```
+
+#### 3. OptionMonitor[T] - 监听配置（实时更新）
+
+适用场景：配置可能动态更新，需要实时获取最新值（如从 Etcd 加载）。
+
+```go
+// 定义配置结构
+type FeatureSettings struct {
+    EnableNewUI    bool `json:"enableNewUI"`
+    MaxConnections int  `json:"maxConnections"`
+}
+
+// 注册配置选项
+core.AddOptions[FeatureSettings](builder, "features")
+
+// 在服务中使用（通常是 Singleton）
+type FeatureService struct {
+    features config.OptionMonitor[FeatureSettings]
+}
+
+func NewFeatureService(features config.OptionMonitor[FeatureSettings]) *FeatureService {
+    return &FeatureService{features: features}
+}
+
+func (s *FeatureService) IsNewUIEnabled() bool {
+    // 总是返回最新的配置值
+    return s.features.Value().EnableNewUI
+}
+```
+
+### 完整配置示例
+
+```go
+package main
+
+import (
+    "github.com/gocrud/app"
+    "github.com/gocrud/app/config"
+    "github.com/gocrud/app/core"
+)
+
+type AppSettings struct {
+    Name  string `json:"name"`
+    Port  int    `json:"port"`
+    Debug bool   `json:"debug"`
+}
+
+type DatabaseSettings struct {
+    Host string `json:"host"`
+    Port int    `json:"port"`
+}
+
+func main() {
+    builder := app.NewApplicationBuilder()
+    
+    // 配置多个配置源
+    builder.ConfigureConfiguration(func(cfg *config.ConfigurationBuilder) {
+        cfg.AddJsonFile("appsettings.json")
+        cfg.AddJsonFile("appsettings.dev.json", true)
+        cfg.AddEnvironmentVariables("APP_")
+    })
+    
+    // 注册配置选项
+    core.AddOptions[AppSettings](builder, "app")
+    core.AddOptions[DatabaseSettings](builder, "database")
+    
+    // 注册服务
+    builder.ConfigureServices(func(services *core.ServiceCollection) {
+        services.AddSingleton(NewMyService)
+    })
+    
+    application := builder.Build()
+    application.Run()
+}
+```
+
+### 配置键路径
+
+支持 `:` 或 `.` 作为分隔符访问嵌套配置：
+
+```go
+// 直接访问配置值
+config.Get("app:name")        // 或 "app.name"
+config.Get("database:host")   // 或 "database.host"
+
+// 获取整数
+port, _ := config.GetInt("app:port")
+
+// 获取布尔值
+debug, _ := config.GetBool("app:debug")
+```
+
+### 配置模式选择指南
+
+| 模式 | 生命周期 | 更新频率 | 适用场景 |
+|------|---------|---------|---------|
+| **Option[T]** | Singleton | 启动时一次 | 应用名称、端口等静态配置 |
+| **OptionSnapshot[T]** | Scoped | 每个作用域 | 请求级别的配置快照 |
+| **OptionMonitor[T]** | Singleton | 实时更新 | 功能开关、动态限流等 |
+
+---
+
 ##  依赖注入与服务获取
 
 ### 获取服务实例
@@ -198,6 +448,7 @@ application.GetService(myService)  // ❌ 没有传递地址
 
 ## 📖 详细文档
 
+- [配置系统 (Configuration)](#️-配置文件系统)
 - [Cron 配置模块详细文档](configure/cron/README.md)
 - [Redis 配置模块详细文档](configure/redis/README.md)
 - [ETCD 配置模块详细文档](configure/etcd/README.md)
