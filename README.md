@@ -1,6 +1,6 @@
 # GoCRUD 应用框架 - 快速开始指南
 
-这是一个基于依赖注入的 Go 应用程序框架，提供了数据库、缓存、定时任务等常用功能的快速集成。
+这是一个基于依赖注入的 Go 应用程序框架，提供了缓存、定时任务等常用功能的快速集成。
 
 ## 📦 安装
 
@@ -30,143 +30,6 @@ go run main.go
 ```
 
 恭喜！你已经创建了第一个 GoCRUD 应用。
-
----
-
-## 💾 添加数据库支持（MySQL 示例）
-
-### 第二步：配置数据库连接
-
-```go
-package main
-
-import (
-    "github.com/gocrud/app"
-    "github.com/gocrud/app/configure"
-    "github.com/gocrud/app/configure/gorm"
-)
-
-func main() {
-    builder := app.NewApplicationBuilder()
-    
-    // 添加数据库配置
-    builder.Configure(configure.Gorm(func(b *gorm.Builder) {
-        b.AddDB("default", func(opts *gorm.DBOptions) {
-            opts.Driver = "mysql"
-            opts.DSN = "root:password@tcp(127.0.0.1:3306)/mydb?charset=utf8mb4&parseTime=True&loc=Local"
-        })
-    }))
-    
-    application := builder.Build()
-    application.Run()
-}
-```
-
-**DSN 格式说明：**
-```
-用户名:密码@tcp(IP地址:端口)/数据库名?charset=utf8mb4&parseTime=True&loc=Local
-```
-
-### 第三步：定义数据模型
-
-```go
-type User struct {
-    ID        uint   `gorm:"primarykey"`
-    Name      string `gorm:"size:100"`
-    Email     string `gorm:"size:100;unique"`
-    CreatedAt time.Time
-}
-```
-
-### 第四步：创建服务并使用数据库
-
-```go
-package main
-
-import (
-    "fmt"
-    "time"
-    
-    "github.com/gocrud/app"
-    "github.com/gocrud/app/configure"
-    "github.com/gocrud/app/configure/gorm"
-    "github.com/gocrud/app/di"
-    gormdb "gorm.io/gorm"
-)
-
-// 数据模型
-type User struct {
-    ID        uint   `gorm:"primarykey"`
-    Name      string `gorm:"size:100"`
-    Email     string `gorm:"size:100;unique"`
-    CreatedAt time.Time
-}
-
-// 用户服务
-type UserService struct {
-    db *gormdb.DB
-}
-
-func NewUserService(db *gormdb.DB) *UserService {
-    // 自动创建表
-    db.AutoMigrate(&User{})
-    return &UserService{db: db}
-}
-
-func (s *UserService) CreateUser(name, email string) error {
-    user := &User{Name: name, Email: email}
-    return s.db.Create(user).Error
-}
-
-func (s *UserService) GetAllUsers() ([]User, error) {
-    var users []User
-    err := s.db.Find(&users).Error
-    return users, err
-}
-
-func main() {
-    builder := app.NewApplicationBuilder()
-    
-    // 配置数据库
-    builder.Configure(configure.Gorm(func(b *gorm.Builder) {
-        b.AddDB("default", func(opts *gorm.DBOptions) {
-            opts.Driver = "mysql"
-            opts.DSN = "root:password@tcp(127.0.0.1:3306)/testdb?charset=utf8mb4&parseTime=True&loc=Local"
-        })
-    }))
-    
-    // 注册服务到依赖注入容器
-    builder.Services(func(provider *di.ServiceProvider) {
-        provider.AddSingleton(di.ServiceDescriptor{
-            Lifetime: di.Singleton,
-            Provider: di.TypeOf[*UserService](),
-            Factory: func(sp di.ServiceProvider) (any, error) {
-                var db *gormdb.DB
-                sp.GetRequiredService(&db)
-                return NewUserService(db), nil
-            },
-        })
-    })
-    
-    application := builder.Build()
-    
-    // 获取服务并使用
-    var userService *UserService
-    application.Services.GetRequiredService(&userService)
-    
-    // 创建用户
-    userService.CreateUser("张三", "zhangsan@example.com")
-    userService.CreateUser("李四", "lisi@example.com")
-    
-    // 查询所有用户
-    users, _ := userService.GetAllUsers()
-    for _, user := range users {
-        fmt.Printf("ID: %d, 姓名: %s, 邮箱: %s\n", user.ID, user.Name, user.Email)
-    }
-    
-    application.Run()
-}
-```
 
 ---
 
@@ -216,248 +79,120 @@ import (
 
 builder.Configure(cron.Configure(func(b *cron.Builder) {
     // 每分钟执行一次
-    b.AddJob("*/1 * * * *", "清理过期数据", func() {
+    b.AddJob("0 */1 * * * *", "清理过期数据", func() {
         fmt.Println("执行清理任务...")
     })
     
     // 每天凌晨 2 点执行
-    b.AddJob("0 2 * * *", "每日统计", func() {
+    b.AddJob("0 0 2 * * *", "每日统计", func() {
         fmt.Println("执行每日统计...")
     })
 }))
 ```
 
-**Cron 表达式格式：**
+**Cron 表达式格式（秒级精度 - 6 位）：**
 ```
-分 时 日 月 周
-*  *  *  *  *
+秒 分 时 日 月 周
+*  *  *  *  *  *
+
+字段说明：
+- 秒：0-59
+- 分：0-59
+- 时：0-23
+- 日：1-31
+- 月：1-12
+- 周：0-6 (0=周日)
 
 示例：
-*/5 * * * *    - 每 5 分钟
-0 */2 * * *    - 每 2 小时
-0 9 * * 1-5    - 工作日上午 9 点
-0 0 1 * *      - 每月 1 日零点
+0 */5 * * * *      - 每 5 分钟
+0 0 */2 * * *      - 每 2 小时
+0 0 9 * * 1-5      - 工作日上午 9 点
+0 0 0 1 * *        - 每月 1 日零点
+*/10 * * * * *     - 每 10 秒
+30 30 14 * * *     - 每天 14:30:30
+0 0 0 * * 0        - 每周日零点
 ```
 
 ---
 
-## 🌐 完整的 Web 应用示例
+##  依赖注入与服务获取
+
+### 获取服务实例
+
+框架提供了两种方式来获取已注册的服务：
+
+#### 1. 通过 Application 获取（推荐）
 
 ```go
-package main
+// 在应用启动后获取服务
+application := builder.Build()
 
-import (
-    "context"
-    "fmt"
-    "time"
-    
-    "github.com/gocrud/app"
-    "github.com/gocrud/app/configure"
-    "github.com/gocrud/app/configure/cron"
-    "github.com/gocrud/app/configure/gorm"
-    "github.com/gocrud/app/configure/redis"
-    "github.com/gocrud/app/di"
-    gormdb "gorm.io/gorm"
-    redisclient "github.com/redis/go-redis/v9"
-)
+var myService *MyService
+application.GetService(&myService)
 
-// 数据模型
-type User struct {
-    ID        uint      `gorm:"primarykey" json:"id"`
-    Name      string    `gorm:"size:100" json:"name"`
-    Email     string    `gorm:"size:100;unique" json:"email"`
-    CreatedAt time.Time `json:"created_at"`
-}
-
-// 用户服务
-type UserService struct {
-    db    *gormdb.DB
-    cache *redisclient.Client
-}
-
-func NewUserService(db *gormdb.DB, cache *redisclient.Client) *UserService {
-    db.AutoMigrate(&User{})
-    return &UserService{db: db, cache: cache}
-}
-
-func (s *UserService) CreateUser(name, email string) (*User, error) {
-    user := &User{Name: name, Email: email}
-    if err := s.db.Create(user).Error; err != nil {
-        return nil, err
-    }
-    
-    // 清除缓存
-    s.cache.Del(context.Background(), "users:all")
-    return user, nil
-}
-
-func (s *UserService) GetAllUsers() ([]User, error) {
-    // 尝试从缓存获取
-    ctx := context.Background()
-    cacheKey := "users:all"
-    
-    var users []User
-    if err := s.db.Find(&users).Error; err != nil {
-        return nil, err
-    }
-    
-    return users, nil
-}
-
-func (s *UserService) CleanupOldUsers() {
-    // 删除 30 天前创建的用户
-    cutoff := time.Now().AddDate(0, 0, -30)
-    result := s.db.Where("created_at < ?", cutoff).Delete(&User{})
-    fmt.Printf("清理了 %d 条过期用户记录\n", result.RowsAffected)
-}
-
-func main() {
-    builder := app.NewApplicationBuilder()
-    
-    // 配置数据库
-    builder.Configure(configure.Gorm(func(b *gorm.Builder) {
-        b.AddDB("default", func(opts *gorm.DBOptions) {
-            opts.Driver = "mysql"
-            opts.DSN = "root:password@tcp(127.0.0.1:3306)/myapp?charset=utf8mb4&parseTime=True&loc=Local"
-            opts.MaxIdleConns = 10
-            opts.MaxOpenConns = 100
-        })
-    }))
-    
-    // 配置 Redis
-    builder.Configure(redis.Configure(func(b *redis.Builder) {
-        b.AddClient("default", func(opts *redis.RedisClientOptions) {
-            opts.Addr = "localhost:6379"
-            opts.DB = 0
-        })
-    }))
-    
-    // 注册服务
-    builder.Services(func(provider *di.ServiceProvider) {
-        provider.AddSingleton(di.ServiceDescriptor{
-            Lifetime: di.Singleton,
-            Provider: di.TypeOf[*UserService](),
-            Factory: func(sp di.ServiceProvider) (any, error) {
-                var db *gormdb.DB
-                var cache *redisclient.Client
-                sp.GetRequiredService(&db)
-                sp.GetRequiredService(&cache)
-                return NewUserService(db, cache), nil
-            },
-        })
-    })
-    
-    // 配置定时任务
-    builder.Configure(cron.Configure(func(b *cron.Builder) {
-        b.AddJob("0 2 * * *", "清理过期用户", func() {
-            var userService *UserService
-            builder.Build().Services.GetRequiredService(&userService)
-            userService.CleanupOldUsers()
-        })
-    }))
-    
-    application := builder.Build()
-    
-    // 使用服务
-    var userService *UserService
-    application.Services.GetRequiredService(&userService)
-    
-    // 创建测试用户
-    user1, _ := userService.CreateUser("张三", "zhangsan@example.com")
-    user2, _ := userService.CreateUser("李四", "lisi@example.com")
-    
-    fmt.Printf("创建用户: %+v\n", user1)
-    fmt.Printf("创建用户: %+v\n", user2)
-    
-    // 查询所有用户
-    users, _ := userService.GetAllUsers()
-    fmt.Printf("总共有 %d 个用户\n", len(users))
-    
-    application.Run()
-}
+// 使用服务
+myService.DoSomething()
 ```
 
----
-
-## 📚 更多配置选项
-
-### 数据库驱动支持
-
-- **MySQL**: `opts.Driver = "mysql"`
-- **PostgreSQL**: `opts.Driver = "postgres"`
-- **SQLite**: `opts.Driver = "sqlite"`
-- **SQL Server**: `opts.Driver = "sqlserver"`
-
-### 多数据库配置
+#### 2. 通过容器直接注入
 
 ```go
-builder.Configure(configure.Gorm(func(b *gorm.Builder) {
-    // 主库
-    b.AddDB("default", func(opts *gorm.DBOptions) {
-        opts.Driver = "mysql"
-        opts.DSN = "root:password@tcp(127.0.0.1:3306)/main_db?..."
-    })
-    
-    // 只读副本
-    b.AddDB("readonly", func(opts *gorm.DBOptions) {
-        opts.Driver = "mysql"
-        opts.DSN = "root:password@tcp(127.0.0.1:3307)/main_db?..."
-    })
-}))
+// 在 ConfigureServices 或其他地方
+container := application.Services()
+
+var myService *MyService
+container.Inject(&myService)
 ```
 
-### 使用特定数据库连接
-
-```go
-import "github.com/gocrud/app/configure/gorm"
-
-type MyService struct {
-    factory *gorm.DBFactory
-}
-
-func (s *MyService) UseReadOnly() {
-    readDB, _ := s.factory.Get("readonly")
-    var users []User
-    readDB.Find(&users)
-}
-```
-
----
-
-## ⚙️ 依赖注入服务生命周期
+### 服务生命周期
 
 ```go
 // Singleton - 单例，整个应用只创建一次
-provider.AddSingleton(...)
+services.AddSingleton(NewMyService)
 
-// Scoped - 作用域，每个请求创建一次（适合 Web 应用）
-provider.AddScoped(...)
+// Scoped - 作用域，每个作用域创建一次
+services.AddScoped(NewRequestService)
 
 // Transient - 瞬态，每次获取都创建新实例
-provider.AddTransient(...)
+services.AddTransient(NewTempService)
+```
+
+### 注意事项
+
+- ⚠️ **必须传递指针的地址**：使用 `&variable`，不是 `variable`
+- ⚠️ **变量必须声明为指针类型**：`var svc *MyService`，不是 `var svc MyService`
+- ⚠️ **失败时会 panic**：如果服务未注册或注入失败，程序会立即 panic
+
+### 正确示例 ✅
+
+```go
+var myService *MyService    // 声明为指针类型
+application.GetService(&myService)  // 传递地址
+```
+
+### 错误示例 ❌
+
+```go
+var myService MyService     // ❌ 不是指针类型
+application.GetService(&myService)
+
+var myService *MyService    
+application.GetService(myService)  // ❌ 没有传递地址
 ```
 
 ---
 
 ## 🎯 常见问题
 
-### 1. 数据库连接失败？
-- 检查 DSN 格式是否正确
-- 确认数据库服务已启动
-- 检查用户名密码是否正确
-- 确认数据库已创建
-
-### 2. Redis 连接失败？
+### 1. Redis 连接失败？
 - 确认 Redis 服务已启动
 - 检查地址和端口是否正确
 - 如果有密码，确保设置了 `opts.Password`
 
-### 3. 如何查看 SQL 日志？
-```go
-opts.LogLevel = logger.Info  // 显示所有 SQL
-opts.LogLevel = logger.Warn  // 只显示警告
-opts.LogLevel = logger.Error // 只显示错误
-```
+### 2. 服务注入失败？
+- 确保服务已通过 `ConfigureServices` 注册
+- 检查变量是否声明为指针类型
+- 确保调用 `GetService` 时传递的是地址（`&variable`）
 
 ---
 
