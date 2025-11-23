@@ -147,12 +147,13 @@ func (b *ConfigurationBuilder) BuildReloadable() (*ReloadableConfiguration, erro
 	defer b.mu.RUnlock()
 
 	config := &ReloadableConfiguration{
-		data:            make(map[string]any),
+		store:           NewValueStore(),
 		builder:         b,
 		changeCallbacks: make([]func(), 0),
 	}
 
 	// 初始加载所有配置源
+	initialData := make(map[string]any)
 	for _, source := range b.sources {
 		data, err := source.Load()
 		if err != nil {
@@ -160,15 +161,16 @@ func (b *ConfigurationBuilder) BuildReloadable() (*ReloadableConfiguration, erro
 		}
 
 		// 合并配置
-		mergeMaps(config.data, data)
+		mergeMaps(initialData, data)
 	}
+	config.store.Store(initialData)
 
 	return config, nil
 }
 
 // ReloadableConfiguration 可重载的配置实现
 type ReloadableConfiguration struct {
-	data            map[string]any
+	store           *ValueStore
 	builder         *ConfigurationBuilder
 	changeCallbacks []func()
 	mu              sync.RWMutex
@@ -190,9 +192,11 @@ func (c *ReloadableConfiguration) Reload() error {
 		mergeMaps(newData, data)
 	}
 
-	// 更新数据并触发回调
+	// 更新数据
+	c.store.Store(newData)
+
+	// 触发回调
 	c.mu.Lock()
-	c.data = newData
 	callbacks := make([]func(), len(c.changeCallbacks))
 	copy(callbacks, c.changeCallbacks)
 	c.mu.Unlock()
@@ -214,9 +218,6 @@ func (c *ReloadableConfiguration) OnReload(callback func()) {
 
 // Get 获取配置值
 func (c *ReloadableConfiguration) Get(key string) string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	value := c.getByPath(key)
 	if value == nil {
 		return ""
@@ -245,9 +246,6 @@ func (c *ReloadableConfiguration) GetWithDefault(key, defaultValue string) strin
 
 // GetInt 获取整数配置值
 func (c *ReloadableConfiguration) GetInt(key string) (int, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	value := c.getByPath(key)
 	if value == nil {
 		return 0, fmt.Errorf("key %s not found", key)
@@ -269,9 +267,6 @@ func (c *ReloadableConfiguration) GetInt(key string) (int, error) {
 
 // GetBool 获取布尔配置值
 func (c *ReloadableConfiguration) GetBool(key string) (bool, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	value := c.getByPath(key)
 	if value == nil {
 		return false, fmt.Errorf("key %s not found", key)
@@ -289,9 +284,6 @@ func (c *ReloadableConfiguration) GetBool(key string) (bool, error) {
 
 // GetSection 获取配置节
 func (c *ReloadableConfiguration) GetSection(key string) Configuration {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	value := c.getByPath(key)
 	if value == nil {
 		return &configuration{data: make(map[string]any)}
@@ -306,12 +298,9 @@ func (c *ReloadableConfiguration) GetSection(key string) Configuration {
 
 // Bind 绑定配置到结构体
 func (c *ReloadableConfiguration) Bind(key string, target any) error {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	var data any
 	if key == "" {
-		data = c.data
+		data = c.store.Load()
 	} else {
 		data = c.getByPath(key)
 	}
@@ -335,25 +324,22 @@ func (c *ReloadableConfiguration) Bind(key string, target any) error {
 
 // GetAll 获取所有配置
 func (c *ReloadableConfiguration) GetAll() map[string]any {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	// 返回副本
 	result := make(map[string]any)
-	mergeMaps(result, c.data)
+	mergeMaps(result, c.store.Load())
 	return result
 }
 
 // getByPath 通过路径获取值（支持 "a:b:c" 或 "a.b.c"）
 func (c *ReloadableConfiguration) getByPath(path string) any {
 	if path == "" {
-		return c.data
+		return c.store.Load()
 	}
 
-	// 支持 : 和 . 作为分隔符
-	parts := strings.Split(strings.ReplaceAll(path, ":", "."), ".")
+	// 使用路径缓存
+	parts := globalPathCache.GetPathSegments(path)
 
-	current := any(c.data)
+	current := any(c.store.Load())
 	for _, part := range parts {
 		if m, ok := current.(map[string]any); ok {
 			current = m[part]

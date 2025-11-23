@@ -98,10 +98,10 @@ type container struct {
 //	defer scope.Dispose()  // 确保释放资源
 //	instance, _ := scope.GetByType(someType)
 type Scope struct {
-	parent    *container      // 父容器引用
-	instances map[typeKey]any // 作用域内的实例缓存
-	mu        sync.RWMutex    // 作用域锁
-	disposed  atomic.Bool     // 是否已释放标志
+	parent    *container   // 父容器引用
+	instances atomic.Value // 作用域内的实例缓存 (map[typeKey]any)
+	mu        sync.Mutex   // 作用域锁 (仅用于写入)
+	disposed  atomic.Bool  // 是否已释放标志
 }
 
 // typeKey 类型键，用于在容器中唯一标识一个依赖
@@ -122,6 +122,7 @@ type providerInfo struct {
 	existingKey  typeKey        // UseExisting 指向的类型
 	optional     bool           // 是否可选
 	scope        ScopeType      // 作用域
+	invoker      Invoker        // 预编译的实例化调用器
 }
 
 // resolveInfo 预解析的依赖信息（在Build时生成，提高运行时性能）
@@ -282,6 +283,15 @@ func (c *container) registerWithConfig(config ProviderConfig) error {
 		}
 		info.existingKey = existingKey
 		info.returnType = existingKey.typ
+	}
+
+	// 创建实例化调用器
+	if info.isFunc {
+		if info.providerType == ProviderTypeClass {
+			info.invoker = createConstructorInvoker(info)
+		} else if info.providerType == ProviderTypeFactory {
+			info.invoker = createFactoryInvoker(info)
+		}
 	}
 
 	c.providers[tk] = info
@@ -742,8 +752,6 @@ func (c *container) topologicalSort() ([]typeKey, error) {
 
 // invokeConstructor 调用构造函数
 func (c *container) invokeConstructor(info *providerInfo, building map[typeKey]bool) (any, error) {
-	fn := reflect.ValueOf(info.value)
-
 	// 解析所有参数
 	args := make([]reflect.Value, len(info.paramTypes))
 	for i, paramType := range info.paramTypes {
@@ -764,7 +772,13 @@ func (c *container) invokeConstructor(info *providerInfo, building map[typeKey]b
 		args[i] = reflect.ValueOf(paramInstance)
 	}
 
-	// 调用构造函数
+	// 使用预编译的调用器执行
+	if info.invoker != nil {
+		return info.invoker(args)
+	}
+
+	// Fallback (兼容旧逻辑)
+	fn := reflect.ValueOf(info.value)
 	results := fn.Call(args)
 	if len(results) == 0 {
 		return nil, fmt.Errorf("constructor returned no values")
@@ -794,8 +808,6 @@ func (c *container) invokeConstructor(info *providerInfo, building map[typeKey]b
 
 // invokeConstructorTransient 调用构造函数（用于瞬态实例）
 func (c *container) invokeConstructorTransient(info *providerInfo) (any, error) {
-	fn := reflect.ValueOf(info.value)
-
 	// 解析所有参数
 	args := make([]reflect.Value, len(info.paramTypes))
 	for i, paramType := range info.paramTypes {
@@ -816,6 +828,12 @@ func (c *container) invokeConstructorTransient(info *providerInfo) (any, error) 
 		args[i] = reflect.ValueOf(paramInstance)
 	}
 
+	// 使用预编译的调用器执行
+	if info.invoker != nil {
+		return info.invoker(args)
+	}
+
+	fn := reflect.ValueOf(info.value)
 	// 调用构造函数
 	results := fn.Call(args)
 	if len(results) == 0 {
@@ -845,8 +863,6 @@ func (c *container) invokeConstructorTransient(info *providerInfo) (any, error) 
 
 // invokeFactory 调用工厂函数
 func (c *container) invokeFactory(info *providerInfo, building map[typeKey]bool) (any, error) {
-	fn := reflect.ValueOf(info.value)
-
 	var args []reflect.Value
 
 	if len(info.deps) > 0 {
@@ -885,6 +901,11 @@ func (c *container) invokeFactory(info *providerInfo, building map[typeKey]bool)
 		}
 	}
 
+	if info.invoker != nil {
+		return info.invoker(args)
+	}
+
+	fn := reflect.ValueOf(info.value)
 	// 调用工厂函数
 	results := fn.Call(args)
 	if len(results) == 0 {
@@ -914,8 +935,6 @@ func (c *container) invokeFactory(info *providerInfo, building map[typeKey]bool)
 
 // invokeFactoryTransient 调用工厂函数（用于瞬态实例）
 func (c *container) invokeFactoryTransient(info *providerInfo) (any, error) {
-	fn := reflect.ValueOf(info.value)
-
 	var args []reflect.Value
 
 	if len(info.deps) > 0 {
@@ -954,6 +973,11 @@ func (c *container) invokeFactoryTransient(info *providerInfo) (any, error) {
 		}
 	}
 
+	if info.invoker != nil {
+		return info.invoker(args)
+	}
+
+	fn := reflect.ValueOf(info.value)
 	// 调用工厂函数
 	results := fn.Call(args)
 	if len(results) == 0 {
@@ -1162,9 +1186,8 @@ func (c *container) Get(tk typeKey) (any, error) {
 		return nil, fmt.Errorf("must call Build() before Get()")
 	}
 
-	c.mu.RLock()
+	// 构建完成后，providers 是只读的，可以直接访问
 	info, exists := c.providers[tk]
-	c.mu.RUnlock()
 
 	if !exists {
 		return nil, fmt.Errorf("no provider found for type %v", tk.typ)
@@ -1299,10 +1322,11 @@ func (c *container) CreateScope() *Scope {
 		panic("Cannot create scope before Build() is called")
 	}
 
-	return &Scope{
-		parent:    c,
-		instances: make(map[typeKey]any),
+	s := &Scope{
+		parent: c,
 	}
+	s.instances.Store(make(map[typeKey]any))
+	return s
 }
 
 // SetCurrentScope 设置当前作用域
@@ -1352,9 +1376,8 @@ func (s *Scope) Get(tk typeKey) (any, error) {
 		return nil, fmt.Errorf("scope has been disposed")
 	}
 
-	s.mu.RLock()
+	// 构建完成后 providers 是只读的
 	info, exists := s.parent.providers[tk]
-	s.mu.RUnlock()
 
 	if !exists {
 		return nil, fmt.Errorf("no provider found for type %v", tk.typ)
@@ -1427,10 +1450,8 @@ func (s *Scope) Inject(target any, tokenOrNil ...any) {
 func (s *Scope) getInstanceByScope(tk typeKey, info *providerInfo) (any, error) {
 	switch info.scope {
 	case ScopeSingleton:
-		// 单例：从父容器获取
-		s.parent.mu.RLock()
+		// 单例：从父容器获取 (instances 是只读的)
 		instance, exists := s.parent.instances[tk]
-		s.parent.mu.RUnlock()
 
 		if !exists {
 			return nil, fmt.Errorf("singleton instance not found for type %v", tk.typ)
@@ -1443,11 +1464,8 @@ func (s *Scope) getInstanceByScope(tk typeKey, info *providerInfo) (any, error) 
 
 	case ScopeScoped:
 		// 作用域：从当前作用域获取或创建
-		s.mu.RLock()
-		instance, exists := s.instances[tk]
-		s.mu.RUnlock()
-
-		if exists {
+		instances := s.instances.Load().(map[typeKey]any)
+		if instance, exists := instances[tk]; exists {
 			return instance, nil
 		}
 
@@ -1456,7 +1474,8 @@ func (s *Scope) getInstanceByScope(tk typeKey, info *providerInfo) (any, error) 
 		defer s.mu.Unlock()
 
 		// 双重检查
-		if instance, exists := s.instances[tk]; exists {
+		instances = s.instances.Load().(map[typeKey]any)
+		if instance, exists := instances[tk]; exists {
 			return instance, nil
 		}
 
@@ -1465,7 +1484,14 @@ func (s *Scope) getInstanceByScope(tk typeKey, info *providerInfo) (any, error) 
 			return nil, err
 		}
 
-		s.instances[tk] = instance
+		// COW 更新
+		newInstances := make(map[typeKey]any, len(instances)+1)
+		for k, v := range instances {
+			newInstances[k] = v
+		}
+		newInstances[tk] = instance
+		s.instances.Store(newInstances)
+
 		return instance, nil
 
 	default:
@@ -1690,5 +1716,5 @@ func (s *Scope) Dispose() {
 	s.disposed.Store(true)
 
 	// 清理实例缓存
-	s.instances = nil
+	s.instances.Store(make(map[typeKey]any))
 }

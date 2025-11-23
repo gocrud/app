@@ -199,22 +199,34 @@ type ConsoleLoggerProvider struct {
 	options      ConsoleLoggerOptions
 	minimumLevel LogLevel
 	mu           sync.RWMutex
+	asyncWriter  *AsyncWriter
 }
 
 func NewConsoleLoggerProvider(options ConsoleLoggerOptions) *ConsoleLoggerProvider {
 	if options.Output == nil {
 		options.Output = os.Stdout
 	}
+
+	formatter := NewTextFormatter()
+	formatter.IncludeTimestamp = options.IncludeTimestamp
+	if options.TimestampFormat != "" {
+		formatter.TimestampFormat = options.TimestampFormat
+	}
+	formatter.ColorOutput = options.ColorOutput
+
+	asyncWriter := NewAsyncWriter(options.Output, formatter, 1000)
+
 	return &ConsoleLoggerProvider{
 		options:      options,
 		minimumLevel: LogLevelInfo,
+		asyncWriter:  asyncWriter,
 	}
 }
 
 func (p *ConsoleLoggerProvider) CreateLogger(category string) Logger {
 	return &consoleLogger{
 		category:     category,
-		options:      p.options,
+		writer:       p.asyncWriter,
 		minimumLevel: p.minimumLevel,
 	}
 }
@@ -228,10 +240,9 @@ func (p *ConsoleLoggerProvider) SetMinimumLevel(level LogLevel) {
 // consoleLogger 控制台日志实现
 type consoleLogger struct {
 	category     string
-	options      ConsoleLoggerOptions
+	writer       *AsyncWriter
 	minimumLevel LogLevel
 	fields       []Field
-	mu           sync.Mutex
 }
 
 func (l *consoleLogger) Trace(msg string, fields ...Field) {
@@ -264,52 +275,21 @@ func (l *consoleLogger) Log(level LogLevel, msg string, fields ...Field) {
 		return
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// 构建日志消息
-	var output string
-
-	// 时间戳
-	if l.options.IncludeTimestamp {
-		output += time.Now().Format(l.options.TimestampFormat) + " "
+	entry := &LogEntry{
+		Time:     time.Now(),
+		Level:    level,
+		Category: l.category,
+		Message:  msg,
+		Fields:   append(l.fields, fields...),
 	}
 
-	// 日志级别（带颜色）
-	if l.options.ColorOutput {
-		output += colorize(level, level.String())
-	} else {
-		output += level.String()
-	}
-
-	// 类别
-	if l.category != "" {
-		output += fmt.Sprintf(" [%s]", l.category)
-	}
-
-	// 消息
-	output += " " + msg
-
-	// 字段
-	allFields := append(l.fields, fields...)
-	if len(allFields) > 0 {
-		output += " {"
-		for i, field := range allFields {
-			if i > 0 {
-				output += ", "
-			}
-			output += fmt.Sprintf("%s=%v", field.Key, field.Value)
-		}
-		output += "}"
-	}
-
-	fmt.Fprintln(l.options.Output, output)
+	l.writer.WriteLog(entry)
 }
 
 func (l *consoleLogger) WithFields(fields ...Field) Logger {
 	return &consoleLogger{
 		category:     l.category,
-		options:      l.options,
+		writer:       l.writer,
 		minimumLevel: l.minimumLevel,
 		fields:       append(l.fields, fields...),
 	}
@@ -318,7 +298,7 @@ func (l *consoleLogger) WithFields(fields ...Field) Logger {
 func (l *consoleLogger) WithCategory(category string) Logger {
 	return &consoleLogger{
 		category:     category,
-		options:      l.options,
+		writer:       l.writer,
 		minimumLevel: l.minimumLevel,
 		fields:       l.fields,
 	}
@@ -368,6 +348,7 @@ type FileLoggerProvider struct {
 	minimumLevel LogLevel
 	file         *os.File
 	mu           sync.RWMutex
+	asyncWriter  *AsyncWriter
 }
 
 func NewFileLoggerProvider(options FileLoggerOptions) *FileLoggerProvider {
@@ -386,14 +367,26 @@ func (p *FileLoggerProvider) CreateLogger(category string) Logger {
 		file, err := os.OpenFile(p.options.Path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to open log file: %v\n", err)
-			return &consoleLogger{category: category, options: ConsoleLoggerOptions{Output: os.Stderr}}
+			// 降级到控制台（这里使用一个新的 sync console logger 可能会有问题，但这是一个 fallback）
+			// 既然我们改了 console logger 的实现，这里也得适配。
+			// 为了简单，如果文件打开失败，我们暂时不返回 logger 或者返回一个 stderr 的 logger
+			// 但我们的 console logger 需要 async writer。
+			// 简化处理：直接返回 stderr 的 AsyncWriter
+			formatter := NewTextFormatter()
+			writer := NewAsyncWriter(os.Stderr, formatter, 100)
+			return &consoleLogger{category: category, writer: writer, minimumLevel: p.minimumLevel}
 		}
 		p.file = file
+
+		formatter := NewTextFormatter()
+		formatter.ColorOutput = false // 文件日志不需要颜色
+		// 初始化 AsyncWriter
+		p.asyncWriter = NewAsyncWriter(p.file, formatter, 1000)
 	}
 
 	return &fileLogger{
 		category:     category,
-		file:         p.file,
+		writer:       p.asyncWriter,
 		minimumLevel: p.minimumLevel,
 	}
 }
@@ -407,10 +400,9 @@ func (p *FileLoggerProvider) SetMinimumLevel(level LogLevel) {
 // fileLogger 文件日志实现
 type fileLogger struct {
 	category     string
-	file         *os.File
+	writer       *AsyncWriter
 	minimumLevel LogLevel
 	fields       []Field
-	mu           sync.Mutex
 }
 
 func (l *fileLogger) Trace(msg string, fields ...Field) {
@@ -443,38 +435,21 @@ func (l *fileLogger) Log(level LogLevel, msg string, fields ...Field) {
 		return
 	}
 
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// 构建日志消息
-	output := fmt.Sprintf("%s %s", time.Now().Format("2006-01-02 15:04:05"), level.String())
-
-	if l.category != "" {
-		output += fmt.Sprintf(" [%s]", l.category)
+	entry := &LogEntry{
+		Time:     time.Now(),
+		Level:    level,
+		Category: l.category,
+		Message:  msg,
+		Fields:   append(l.fields, fields...),
 	}
 
-	output += " " + msg
-
-	// 字段
-	allFields := append(l.fields, fields...)
-	if len(allFields) > 0 {
-		output += " {"
-		for i, field := range allFields {
-			if i > 0 {
-				output += ", "
-			}
-			output += fmt.Sprintf("%s=%v", field.Key, field.Value)
-		}
-		output += "}"
-	}
-
-	fmt.Fprintln(l.file, output)
+	l.writer.WriteLog(entry)
 }
 
 func (l *fileLogger) WithFields(fields ...Field) Logger {
 	return &fileLogger{
 		category:     l.category,
-		file:         l.file,
+		writer:       l.writer,
 		minimumLevel: l.minimumLevel,
 		fields:       append(l.fields, fields...),
 	}
@@ -483,7 +458,7 @@ func (l *fileLogger) WithFields(fields ...Field) Logger {
 func (l *fileLogger) WithCategory(category string) Logger {
 	return &fileLogger{
 		category:     category,
-		file:         l.file,
+		writer:       l.writer,
 		minimumLevel: l.minimumLevel,
 		fields:       l.fields,
 	}
