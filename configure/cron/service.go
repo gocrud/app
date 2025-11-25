@@ -101,30 +101,26 @@ func (s *service) removeJob(name string) {
 	}
 }
 
-// StartAsync 实现 HostedService.StartAsync
-func (s *service) StartAsync(ctx context.Context) error {
+// Start 实现 HostedService.Start
+func (s *service) Start(ctx context.Context) error {
 	s.logger.Info(fmt.Sprintf("CronService starting with %d jobs", len(s.jobs)))
 	s.cron.Start()
 
 	// 阻塞直到上下文取消
 	<-ctx.Done()
+	
+	// 上下文取消后，停止 cron
+	stopCtx := s.cron.Stop()
+	<-stopCtx.Done()
+	
 	return nil
 }
 
-// StopAsync 实现 HostedService.StopAsync
-func (s *service) StopAsync(ctx context.Context) error {
+// Stop 实现 HostedService.Stop
+func (s *service) Stop(ctx context.Context) error {
+	// 注意：Stop 已经在 Start 的上下文取消处理中被调用了
+	// 这里只是作为额外的停止点，如果有需要的话
 	s.logger.Info("CronService stopping")
-
-	// 优雅停止 cron（等待正在运行的任务完成）
-	stopCtx := s.cron.Stop()
-
-	select {
-	case <-stopCtx.Done():
-		s.logger.Info("CronService stopped gracefully")
-	case <-ctx.Done():
-		s.logger.Warn("CronService stop timeout, forcing shutdown")
-	}
-
 	return nil
 }
 

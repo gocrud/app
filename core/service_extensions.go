@@ -1,53 +1,51 @@
 package core
 
 import (
+	"reflect"
+
 	"github.com/gocrud/app/di"
 )
 
-// AddSingleton 将接口 T 绑定到实现 impl，并注册为单例
-// impl 可以是实例，也可以是构造函数
+// AddSingleton registers a singleton service.
+// If impl is provided, it can be an instance or a factory function.
 //
-// 示例:
+// Examples:
 //
-//	core.AddSingleton[IService](services, NewServiceImpl)
-func AddSingleton[T any](s *ServiceCollection, impl any) {
-	s.container.ProvideType(di.TypeProvider{
-		Provide: di.TypeOf[T](),
-		UseType: impl,
-		Options: di.ProviderOptions{
-			Scope: di.ScopeSingleton,
-		},
-	})
+//	core.AddSingleton[IService](services) // Auto-register struct pointer or interface if implementation inferred
+//	core.AddSingleton[IService](services, di.Use[*ServiceImpl]())
+//	core.AddSingleton[IService](services, di.WithFactory(NewService))
+func AddSingleton[T any](s *ServiceCollection, opts ...di.Option) {
+	finalOpts := append([]di.Option{di.WithSingleton()}, opts...)
+	di.Register[T](s.container, finalOpts...)
 }
 
-// AddTransient 将接口 T 绑定到实现 impl，并注册为瞬态服务
-// impl 可以是实例，也可以是构造函数
-//
-// 示例:
-//
-//	core.AddTransient[IWorker](services, NewWorker)
-func AddTransient[T any](s *ServiceCollection, impl any) {
-	s.container.ProvideType(di.TypeProvider{
-		Provide: di.TypeOf[T](),
-		UseType: impl,
-		Options: di.ProviderOptions{
-			Scope: di.ScopeTransient,
-		},
-	})
+// AddTransient registers a transient service.
+func AddTransient[T any](s *ServiceCollection, opts ...di.Option) {
+	finalOpts := append([]di.Option{di.WithTransient()}, opts...)
+	di.Register[T](s.container, finalOpts...)
 }
 
-// AddScoped 将接口 T 绑定到实现 impl，并注册为作用域服务
-// impl 可以是实例，也可以是构造函数
-//
-// 示例:
-//
-//	core.AddScoped[IRequestScope](services, NewRequestScope)
-func AddScoped[T any](s *ServiceCollection, impl any) {
-	s.container.ProvideType(di.TypeProvider{
-		Provide: di.TypeOf[T](),
-		UseType: impl,
-		Options: di.ProviderOptions{
-			Scope: di.ScopeScoped,
-		},
-	})
+// AddScoped registers a scoped service.
+func AddScoped[T any](s *ServiceCollection, opts ...di.Option) {
+	finalOpts := append([]di.Option{di.WithScoped()}, opts...)
+	di.Register[T](s.container, finalOpts...)
+}
+
+// Helper to convert legacy "impl any" to options (internal use if needed, but we prefer explicit options)
+// For backward compatibility wrappers if we wanted them:
+func convertImplToOptions(impl any) []di.Option {
+	if impl == nil {
+		return nil
+	}
+	val := reflect.ValueOf(impl)
+	// If function -> Factory
+	if val.Kind() == reflect.Func {
+		return []di.Option{di.WithFactory(impl)}
+	}
+	// If value -> Value (if not a type) - but wait, Register[T] expects static value via WithValue
+	// or implementation type via Use[T].
+	// Since 'impl' is 'any', strictly speaking if it's an instance we use WithValue.
+	// If it's just a type hint, we can't easily use Use[T] because Use[T] requires compile-time type.
+	// So we rely on WithValue for instances.
+	return []di.Option{di.WithValue(impl)}
 }

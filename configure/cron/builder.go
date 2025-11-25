@@ -101,7 +101,7 @@ func (b *Builder) build(ctx *core.BuildContext, logger logging.Logger) (hosting.
 
 		default:
 			// 带依赖注入的函数（需要使用容器）
-			wrappedHandler, err := b.wrapHandlerWithDI(ctx.GetContainer(), logger, handler)
+			wrappedHandler, err := b.wrapHandlerWithDI(ctx.Container(), logger, handler)
 			if err != nil {
 				return nil, fmt.Errorf("failed to wrap job '%s' with DI: %w", job.name, err)
 			}
@@ -134,7 +134,7 @@ func (b *Builder) wrapHandlerWithDI(container di.Container, logger logging.Logge
 			paramType := handlerType.In(i)
 
 			// 从容器获取实例
-			instance, err := container.GetByType(paramType)
+			instance, err := container.Get(paramType)
 			if err != nil {
 				logger.Error(fmt.Sprintf("Failed to resolve parameter %d (%v) for cron job", i, paramType),
 					logging.Field{Key: "error", Value: err.Error()})

@@ -6,294 +6,176 @@ import (
 	"github.com/gocrud/app/di"
 )
 
-// 基准测试接口和实现
-type BenchLogger interface {
-	Log(msg string)
+// Benchmarking Structures
+type IService interface {
+	Do()
 }
 
-type BenchConsoleLogger struct{}
+type ServiceImpl struct{}
 
-func (l *BenchConsoleLogger) Log(msg string) {}
+func (s *ServiceImpl) Do() {}
 
-type BenchDatabase interface {
-	Query(sql string) error
+type LargeStruct struct {
+	S1 *ServiceImpl `di:""`
+	S2 *ServiceImpl `di:""`
+	S3 *ServiceImpl `di:""`
+	S4 *ServiceImpl `di:""`
+	S5 *ServiceImpl `di:""`
 }
 
-type BenchMySQLDB struct{}
-
-func (db *BenchMySQLDB) Query(sql string) error { return nil }
-
-type BenchCache interface {
-	Get(key string) string
-	Set(key, value string)
-}
-
-type BenchRedisCache struct{}
-
-func (c *BenchRedisCache) Get(key string) string { return "" }
-func (c *BenchRedisCache) Set(key, value string) {}
-
-// 简单服务
-type BenchSimpleService struct {
-	Logger BenchLogger `di:""`
-}
-
-// 中等复杂服务
-type BenchMediumService struct {
-	Logger   BenchLogger   `di:""`
-	Database BenchDatabase `di:""`
-	Cache    BenchCache    `di:""`
-}
-
-// 复杂服务（多层依赖）
-type BenchRepository struct {
-	Database BenchDatabase `di:""`
-	Cache    BenchCache    `di:""`
-	Logger   BenchLogger   `di:""`
-}
-
-type BenchBusinessService struct {
-	Repo   *BenchRepository `di:""`
-	Logger BenchLogger      `di:""`
-}
-
-type BenchAPIService struct {
-	Business *BenchBusinessService `di:""`
-	Logger   BenchLogger           `di:""`
-	Cache    BenchCache            `di:""`
-}
-
-// Benchmark 1: 容器构建性能
-func BenchmarkBuild_Simple(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-		container.Provide(&BenchSimpleService{})
-		container.Build()
+func BenchmarkResolve_Singleton(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c) // Implicit Singleton
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
 	}
-}
 
-func BenchmarkBuild_Medium(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-		di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
-		di.BindWith[BenchCache](container, &BenchRedisCache{})
-		container.Provide(&BenchMediumService{})
-		container.Build()
-	}
-}
-
-func BenchmarkBuild_Complex(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-		di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
-		di.BindWith[BenchCache](container, &BenchRedisCache{})
-		container.Provide(&BenchRepository{})
-		container.Provide(&BenchBusinessService{})
-		container.Provide(&BenchAPIService{})
-		container.Build()
-	}
-}
-
-// Benchmark 2: 注入性能（Build 后）
-func BenchmarkInject_Simple(b *testing.B) {
-	container := di.NewContainer()
-	di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-	container.Provide(&BenchSimpleService{})
-	container.Build()
-
-	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		var svc *BenchSimpleService
-		container.Inject(&svc)
-		_ = svc
+		_, _ = di.Resolve[*ServiceImpl](c)
 	}
 }
 
-func BenchmarkInject_Medium(b *testing.B) {
-	container := di.NewContainer()
-	di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-	di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
-	di.BindWith[BenchCache](container, &BenchRedisCache{})
-	container.Provide(&BenchMediumService{})
-	container.Build()
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		var svc *BenchMediumService
-		container.Inject(&svc)
-		_ = svc
-	}
-}
-
-func BenchmarkInject_Complex(b *testing.B) {
-	container := di.NewContainer()
-	di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-	di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
-	di.BindWith[BenchCache](container, &BenchRedisCache{})
-	container.Provide(&BenchRepository{})
-	container.Provide(&BenchBusinessService{})
-	container.Provide(&BenchAPIService{})
-	container.Build()
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		var svc *BenchAPIService
-		container.Inject(&svc)
-		_ = svc
-	}
-}
-
-// Benchmark 3: 不同注册方式的性能对比
-func BenchmarkProvide_Bind(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-		container.Build()
-	}
-}
-
-func BenchmarkProvide_ProvideType(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-		container.ProvideType(di.TypeProvider{
-			Provide: di.TypeOf[BenchLogger](),
-			UseType: &BenchConsoleLogger{},
-		})
-		container.Build()
-	}
-}
-
-func BenchmarkProvide_Direct(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-		container.Provide(&BenchSimpleService{})
-		container.Build()
-	}
-}
-
-// Benchmark 4: 构造函数 vs 实例
-func BenchmarkProvide_Instance(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-		container.Build()
-	}
-}
-
-func BenchmarkProvide_Constructor(b *testing.B) {
-	constructor := func() *BenchConsoleLogger {
-		return &BenchConsoleLogger{}
+func BenchmarkResolve_Singleton_Parallel(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c)
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
 	}
 
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-		container.ProvideType(di.TypeProvider{
-			Provide: di.TypeOf[BenchLogger](),
-			UseType: constructor,
-		})
-		container.Build()
-	}
-}
-
-// Benchmark 5: 大规模注册性能
-func BenchmarkBuild_LargeScale(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		container := di.NewContainer()
-
-		// 注册基础服务
-		di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-		di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
-		di.BindWith[BenchCache](container, &BenchRedisCache{})
-
-		// 注册多个服务实例（同一类型只能注册一次）
-		container.Provide(&BenchRepository{})
-		container.Provide(&BenchBusinessService{})
-		container.Provide(&BenchAPIService{})
-		container.Provide(&BenchSimpleService{})
-		container.Provide(&BenchMediumService{})
-
-		container.Build()
-	}
-}
-
-// Benchmark 6: 并发注入性能
-func BenchmarkInject_Concurrent(b *testing.B) {
-	container := di.NewContainer()
-	di.BindWith[BenchLogger](container, &BenchConsoleLogger{})
-	di.BindWith[BenchDatabase](container, &BenchMySQLDB{})
-	di.BindWith[BenchCache](container, &BenchRedisCache{})
-	container.Provide(&BenchMediumService{})
-	container.Build()
-
-	b.ReportAllocs()
-	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			var svc *BenchMediumService
-			container.Inject(&svc)
-			_ = svc
+			_, _ = di.Resolve[*ServiceImpl](c)
 		}
 	})
 }
 
-// Benchmark 7: 对比手动创建的性能
-func BenchmarkManual_Simple(b *testing.B) {
-	b.ReportAllocs()
+func BenchmarkResolve_Transient(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c, di.WithTransient())
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		logger := &BenchConsoleLogger{}
-		_ = &BenchSimpleService{Logger: logger}
+		_, _ = di.Resolve[*ServiceImpl](c)
 	}
 }
 
-func BenchmarkManual_Medium(b *testing.B) {
-	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
-		logger := &BenchConsoleLogger{}
-		db := &BenchMySQLDB{}
-		cache := &BenchRedisCache{}
-		_ = &BenchMediumService{
-			Logger:   logger,
-			Database: db,
-			Cache:    cache,
+func BenchmarkResolve_Transient_Parallel(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c, di.WithTransient())
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = di.Resolve[*ServiceImpl](c)
 		}
+	})
+}
+
+func BenchmarkResolve_Scoped(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c, di.WithScoped())
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
+	}
+
+	scope := c.CreateScope()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = di.Resolve[*ServiceImpl](scope)
 	}
 }
 
-func BenchmarkManual_Complex(b *testing.B) {
-	b.ReportAllocs()
+// BenchmarkResolve_Scoped_Parallel simulates multiple requests (goroutines)
+// sharing the SAME scope. This tests the scope's internal locking.
+func BenchmarkResolve_Scoped_Parallel_SharedScope(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c, di.WithScoped())
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
+	}
+
+	scope := c.CreateScope()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, _ = di.Resolve[*ServiceImpl](scope)
+		}
+	})
+}
+
+// BenchmarkResolve_Scoped_Parallel_SeparateScopes simulates a real web server
+// where each request (goroutine) has its OWN scope.
+func BenchmarkResolve_Scoped_Parallel_SeparateScopes(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c, di.WithScoped())
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.RunParallel(func(pb *testing.PB) {
+		scope := c.CreateScope()
+		for pb.Next() {
+			_, _ = di.Resolve[*ServiceImpl](scope)
+		}
+	})
+}
+
+func BenchmarkInjection_Field_Transient(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c, di.WithTransient())
+	di.Register[*LargeStruct](c, di.WithTransient())
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		logger := &BenchConsoleLogger{}
-		db := &BenchMySQLDB{}
-		cache := &BenchRedisCache{}
-		repo := &BenchRepository{
-			Database: db,
-			Cache:    cache,
-			Logger:   logger,
-		}
-		business := &BenchBusinessService{
-			Repo:   repo,
-			Logger: logger,
-		}
-		_ = &BenchAPIService{
-			Business: business,
-			Logger:   logger,
-			Cache:    cache,
-		}
+		_, _ = di.Resolve[*LargeStruct](c)
+	}
+}
+
+func BenchmarkResolve_Interface(b *testing.B) {
+	c := di.NewContainer()
+	di.Register[IService](c, di.Use[*ServiceImpl]())
+	if err := c.Build(); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = di.Resolve[IService](c)
+	}
+}
+
+func TestConcurrency(t *testing.T) {
+	c := di.NewContainer()
+	di.Register[*ServiceImpl](c, di.WithTransient())
+	if err := c.Build(); err != nil {
+		t.Fatal(err)
+	}
+
+	concurrency := 100
+	done := make(chan bool)
+
+	for i := 0; i < concurrency; i++ {
+		go func() {
+			for j := 0; j < 1000; j++ {
+				if _, err := di.Resolve[*ServiceImpl](c); err != nil {
+					t.Errorf("Concurrent resolve failed: %v", err)
+				}
+			}
+			done <- true
+		}()
+	}
+
+	for i := 0; i < concurrency; i++ {
+		<-done
 	}
 }

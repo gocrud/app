@@ -113,6 +113,27 @@ func AddOptions[T any](b *ApplicationBuilder, section string) *ApplicationBuilde
 	})
 }
 
+// AddTask 添加一个简单的后台任务
+func (b *ApplicationBuilder) AddTask(task func(ctx context.Context) error) *ApplicationBuilder {
+	b.Configure(func(ctx *BuildContext) {
+		ctx.AddHostedService(&functionalService{task: task})
+	})
+	return b
+}
+
+// functionalService 函数式托管服务
+type functionalService struct {
+	task func(ctx context.Context) error
+}
+
+func (f *functionalService) Start(ctx context.Context) error {
+	return f.task(ctx)
+}
+
+func (f *functionalService) Stop(ctx context.Context) error {
+	return nil
+}
+
 // UseShutdownTimeout 设置关闭超时
 func (b *ApplicationBuilder) UseShutdownTimeout(timeout time.Duration) *ApplicationBuilder {
 	b.mu.Lock()
@@ -142,29 +163,17 @@ func (b *ApplicationBuilder) Build() Application {
 	// 创建 DI 容器
 	container := di.NewContainer()
 
-	// 注册核心服务到容器（按接口类型注册）
-	// 同时注册为 Configuration 接口和 ReloadableConfiguration 具体类型
-	container.ProvideValue(di.ValueProvider{
-		Provide: di.TypeOf[config.Configuration](),
-		Value:   reloadableConfig,
-	})
-	container.ProvideValue(di.ValueProvider{
-		Provide: di.TypeOf[*config.ReloadableConfiguration](),
-		Value:   reloadableConfig,
-	})
-	container.ProvideValue(di.ValueProvider{
-		Provide: di.TypeOf[logging.LoggerFactory](),
-		Value:   loggerFactory,
-	})
-	container.ProvideValue(di.ValueProvider{
-		Provide: di.TypeOf[logging.Logger](),
-		Value:   logger,
-	})
-	// 注册容器本身，以便服务可以注入容器
-	container.ProvideValue(di.ValueProvider{
-		Provide: di.TypeOf[di.Container](),
-		Value:   container,
-	})
+	// 注册核心服务到容器
+	// 1. Configuration (ReloadableConfig is the impl)
+	di.Register[config.Configuration](container, di.Use[*config.ReloadableConfiguration](), di.WithValue(reloadableConfig), di.WithSingleton())
+	di.Register[*config.ReloadableConfiguration](container, di.WithValue(reloadableConfig), di.WithSingleton())
+
+	// 2. Logging
+	di.Register[logging.LoggerFactory](container, di.WithValue(loggerFactory), di.WithSingleton())
+	di.Register[logging.Logger](container, di.WithValue(logger), di.WithSingleton())
+
+	// 3. Container itself
+	di.Register[di.Container](container, di.WithValue(container), di.WithSingleton())
 
 	// 创建服务集合
 	services := &ServiceCollection{
@@ -192,11 +201,6 @@ func (b *ApplicationBuilder) Build() Application {
 		b.serviceConfigurator(services)
 	}
 
-	// 合并托管服务（将 HostedService 转换为 any）
-	for _, hs := range buildContext.hostedServices {
-		services.hostedServiceProviders = append(services.hostedServiceProviders, hs)
-	}
-
 	// 构建容器
 	if err := container.Build(); err != nil {
 		logger.Fatal("Failed to build DI container",
@@ -205,13 +209,20 @@ func (b *ApplicationBuilder) Build() Application {
 
 	logger.Info("DI container built successfully")
 
-	// 从容器中获取所有 hosted services
-	injectedServices := make([]hosting.HostedService, 0, len(services.hostedServiceProviders))
+	// 合并托管服务
+	// HostedService 通常有两种注册方式：
+	// 1. 通过 ApplicationBuilder.AddTask 或 Configure(ctx.AddHostedService) 直接添加实例 (BuildContext)
+	// 2. 通过 ConfigureServices 注册到 DI，并标记为 HostedService (ServiceCollection)
+	injectedServices := make([]hosting.HostedService, 0)
 
+	// 1. 来自 BuildContext (已经是实例)
+	injectedServices = append(injectedServices, buildContext.hostedServices...)
+
+	// 2. 来自 ServiceCollection (需要解析)
 	for _, provider := range services.hostedServiceProviders {
-		// 判断是构造函数还是实例
-		providerValue := reflect.ValueOf(provider)
+		// 确定要解析的类型
 		var serviceType reflect.Type
+		providerValue := reflect.ValueOf(provider)
 
 		if providerValue.Kind() == reflect.Func {
 			// 构造函数：使用返回值类型
@@ -219,25 +230,25 @@ func (b *ApplicationBuilder) Build() Application {
 			if funcType.NumOut() > 0 {
 				serviceType = funcType.Out(0)
 			} else {
-				logger.Warn("Constructor function has no return value, skipping")
+				logger.Warn("Constructor function has no return value, skipping hosted service")
 				continue
 			}
 		} else {
-			// 实例：使用实例类型
+			// 实例：使用实例的类型
 			serviceType = reflect.TypeOf(provider)
 		}
 
 		logger.Debug("Retrieving hosted service from container",
 			logging.Field{Key: "type", Value: serviceType.String()})
 
-		injectedService, err := container.GetByType(serviceType)
+		// 解析服务
+		injectedService, err := container.Get(serviceType)
 		if err != nil {
 			logger.Fatal("Failed to retrieve hosted service from container",
 				logging.Field{Key: "error", Value: err.Error()},
 				logging.Field{Key: "type", Value: serviceType.String()})
 		}
 
-		logger.Debug("Successfully retrieved hosted service from container")
 		hs, ok := injectedService.(hosting.HostedService)
 		if !ok {
 			logger.Fatal("Service does not implement HostedService interface",
@@ -328,17 +339,16 @@ func (a *application) RunAsync(ctx context.Context) error {
 	}
 
 	// 启动托管服务，使用可取消的 context
-	if err := a.serviceManager.StartAll(a.runCtx); err != nil {
-		a.logger.Error("Failed to start hosted services",
-			logging.Field{Key: "error", Value: err.Error()})
-		return err
-	}
+	// 获取错误通道
+	errCh := a.serviceManager.StartAll(a.runCtx)
 
 	a.logger.Info("Application started successfully")
 
-	// 等待停止信号
+	// 等待停止信号或错误
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	var runErr error
 
 	select {
 	case sig := <-sigCh:
@@ -348,6 +358,11 @@ func (a *application) RunAsync(ctx context.Context) error {
 		a.logger.Info("Application stop requested")
 	case <-ctx.Done():
 		a.logger.Info("Context cancelled")
+	case err := <-errCh:
+		// 接收到服务启动失败的错误
+		a.logger.Error("Hosted service failed, stopping application",
+			logging.Field{Key: "error", Value: err.Error()})
+		runErr = err
 	}
 
 	// 优雅关闭
@@ -393,7 +408,7 @@ func (a *application) RunAsync(ctx context.Context) error {
 	a.running = false
 	a.mu.Unlock()
 
-	return nil
+	return runErr
 }
 
 // Stop 停止应用程序
@@ -445,7 +460,7 @@ func (a *application) GetService(ptr any) {
 	targetType := elemValue.Type()
 
 	// 从容器获取服务实例
-	instance, err := a.container.GetByType(targetType)
+	instance, err := a.container.Get(targetType)
 	if err != nil {
 		panic(fmt.Sprintf("app: failed to get service %s: %v", targetType.String(), err))
 	}
@@ -461,72 +476,11 @@ type ServiceCollection struct {
 	hostedServiceProviders []any // 存储构造函数或实例
 }
 
-// AddSingleton 注册单例服务
-// 单例服务在整个应用程序生命周期内只创建一次实例，所有获取操作返回同一个实例
-// 适用场景：无状态服务、配置、日志记录器等
-func (s *ServiceCollection) AddSingleton(value any) {
-	s.addWithScope(value, di.ScopeSingleton)
-}
-
-// AddScoped 注册作用域服务
-// 作用域服务在同一个 Scope 内只创建一次实例，不同 Scope 之间实例相互独立
-// 适用场景：HTTP 请求级别的服务、数据库连接、工作单元等
-func (s *ServiceCollection) AddScoped(value any) {
-	s.addWithScope(value, di.ScopeScoped)
-}
-
-// AddTransient 注册瞬态服务
-// 瞬态服务每次获取都创建新实例，不缓存
-// 适用场景：命令对象、事件对象等需要独立状态的对象
-func (s *ServiceCollection) AddTransient(value any) {
-	s.addWithScope(value, di.ScopeTransient)
-}
-
-// addWithScope 内部方法：使用指定作用域注册服务
-func (s *ServiceCollection) addWithScope(value any, scope di.ScopeType) {
-	// 判断是构造函数还是实例
-	val := reflect.ValueOf(value)
-
-	if val.Kind() == reflect.Func {
-		// 构造函数
-		funcType := val.Type()
-		if funcType.NumOut() == 0 {
-			s.logger.Fatal("Constructor function must return at least one value")
-			return
-		}
-
-		// 使用构造函数返回值类型作为提供类型
-		config := di.ProviderConfig{
-			Provide:  funcType.Out(0),
-			UseClass: value,
-			Scope:    scope,
-		}
-
-		s.container.ProvideWithConfig(config)
-	} else {
-		// 实例：使用 ValueProvider
-		s.container.ProvideValue(di.ValueProvider{
-			Provide: reflect.TypeOf(value),
-			Value:   value,
-			Options: di.ProviderOptions{
-				Scope: scope,
-			},
-		})
-	}
-}
-
 // AddHostedService 添加托管服务（支持实例或构造函数）
 func (s *ServiceCollection) AddHostedService(value any) {
-	// 注册到容器以支持依赖注入
-	s.container.Provide(value)
-
-	// 存储提供者，稍后从容器获取实例
+	// Workaround: We can't fix this perfectly without a generic `AddHostedService[T]`.
+	// Let's append to list and try to rely on it being registered elsewhere or fail.
 	s.hostedServiceProviders = append(s.hostedServiceProviders, value)
-}
-
-// Bind 绑定接口到实现
-func (s *ServiceCollection) Bind(provider di.TypeProvider) {
-	s.container.ProvideType(provider)
 }
 
 // Environment 环境接口

@@ -50,36 +50,16 @@ func (c *BuildContext) SetCleanup(key string, cleanup func()) {
 	c.cleanups[key] = cleanup
 }
 
-// Provide 注册服务到容器（默认行为由容器决定）
-func (c *BuildContext) Provide(value any) {
-	c.container.Provide(value)
-}
-
-// ProvideValue 使用 ValueProvider 注册服务
-func (c *BuildContext) ProvideValue(provider di.ValueProvider) {
-	c.container.ProvideValue(provider)
-}
-
-// ProvideType 使用 TypeProvider 注册服务
-func (c *BuildContext) ProvideType(provider di.TypeProvider) {
-	c.container.ProvideType(provider)
-}
-
-// ProvideWithConfig 使用 ProviderConfig 注册服务
-func (c *BuildContext) ProvideWithConfig(config di.ProviderConfig) {
-	c.container.ProvideWithConfig(config)
-}
-
-// ResolveService 从容器中解析服务（供配置器内部使用，如 Cron 的依赖注入）
-// 注意：仅在必要时使用此方法，优先使用 Provide 系列方法注册服务
-func (c *BuildContext) ResolveService(serviceType any) (any, error) {
-	return c.container.GetByType(reflect.TypeOf(serviceType))
-}
-
-// GetContainer 获取 DI 容器（已废弃：请使用 Provide 系列方法）
-// Deprecated: 直接访问容器可能导致误用，请使用 Provide/ProvideValue/ProvideType/ProvideWithConfig
-func (c *BuildContext) GetContainer() di.Container {
+// Container returns the underlying DI container.
+// This allows using di.Register[T](ctx.Container(), ...) directly.
+func (c *BuildContext) Container() di.Container {
 	return c.container
+}
+
+// ResolveService 从容器中解析服务
+// 注意：仅在必要时使用此方法，优先使用 Register 系列方法注册服务
+func (c *BuildContext) ResolveService(serviceType reflect.Type) (any, error) {
+	return c.container.Get(serviceType)
 }
 
 // GetLogger 获取日志记录器
@@ -106,33 +86,31 @@ func ConfigureOptions[T any](ctx *BuildContext, section string) {
 	cache := config.NewOptionsCache[T](ctx.configuration, section)
 
 	// 注册 Option[T] - Singleton（应用生命周期内不变）
-	ctx.ProvideValue(di.ValueProvider{
-		Provide: di.TypeOf[config.Option[T]](),
-		Value:   config.NewOption[T](cache.Get()),
-		Options: di.ProviderOptions{
-			Scope: di.ScopeSingleton,
-		},
-	})
+	di.Register[config.Option[T]](ctx.container,
+		di.WithValue(config.NewOption[T](cache.Get())),
+		di.WithSingleton(),
+	)
 
 	// 注册 OptionMonitor[T] - Singleton（实时更新，框架自动处理）
-	ctx.ProvideValue(di.ValueProvider{
-		Provide: di.TypeOf[config.OptionMonitor[T]](),
-		Value:   config.NewOptionMonitor[T](cache),
-		Options: di.ProviderOptions{
-			Scope: di.ScopeSingleton,
-		},
-	})
+	di.Register[config.OptionMonitor[T]](ctx.container,
+		di.WithValue(config.NewOptionMonitor[T](cache)),
+		di.WithSingleton(),
+	)
 
 	// 注册 OptionSnapshot[T] - Scoped（每个作用域创建时的快照）
-	ctx.ProvideWithConfig(di.ProviderConfig{
-		Provide: di.TypeOf[config.OptionSnapshot[T]](),
-		UseClass: func() config.OptionSnapshot[T] {
+	di.Register[config.OptionSnapshot[T]](ctx.container,
+		di.WithFactory(func() config.OptionSnapshot[T] {
 			return config.NewOptionSnapshot[T](cache.Snapshot())
-		},
-		Scope: di.ScopeScoped,
-	})
+		}),
+		di.WithScoped(),
+	)
+
+	// Hack: We need to stringify T for logging, but we can't easily get type name from generic T without instance.
+	// We can create zero value.
+	var zero T
+	typeName := reflect.TypeOf(zero).String()
 
 	ctx.logger.Info("Configured options",
-		logging.Field{Key: "type", Value: di.TypeOf[T]().String()},
+		logging.Field{Key: "type", Value: typeName},
 		logging.Field{Key: "section", Value: section})
 }

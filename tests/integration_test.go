@@ -63,10 +63,18 @@ func TestAppIntegration(t *testing.T) {
 	// 4. 配置 Services (DI)
 	builder.ConfigureServices(func(s *core.ServiceCollection) {
 		// 注册单例服务 (构造函数方式)
-		s.AddSingleton(NewServiceImpl)
+		// 现在的 API: core.AddSingleton[*ServiceImpl](s, di.WithFactory(NewServiceImpl))
+		// 或者: core.AddSingleton[*ServiceImpl](s, di.Use(NewServiceImpl)) 如果可以推断
+		// 更明确的方式:
+		core.AddSingleton[*ServiceImpl](s, di.WithFactory(NewServiceImpl))
 
 		// 绑定接口到实现 (使用新的泛型语法糖)
-		core.AddSingleton[IService](s, NewServiceImpl)
+		// 绑定接口: core.AddSingleton[IService](s, di.Use[*ServiceImpl]())
+		// 但是因为 *ServiceImpl 已经注册了，我们需要确保 IService 指向同一个单例？
+		// 如果我们再次使用 WithFactory(NewServiceImpl)，会创建第二个单例（除非我们有别名机制，目前 DI 好像没有显式的 Alias 支持，除了 Use[T]）。
+		// 如果我们使用 di.Use[*ServiceImpl]()，它会尝试解析 *ServiceImpl。
+		// 让我们试试绑定接口到具体实现类型。
+		core.AddSingleton[IService](s, di.Use[*ServiceImpl]())
 	})
 
 	// 5. 构建应用
@@ -87,22 +95,21 @@ func TestAppIntegration(t *testing.T) {
 	// 7. 验证依赖注入 (DI 优化验证)
 	container := application.Services()
 
-	// 获取实现类实例
-	svcImpl, err := container.GetByType(di.TypeOf[*ServiceImpl]())
+	// 获取实现类实例 (di.Resolve 替代 GetByType)
+	impl, err := di.Resolve[*ServiceImpl](container)
 	if err != nil {
 		t.Fatalf("Failed to get *ServiceImpl: %v", err)
 	}
-	impl := svcImpl.(*ServiceImpl)
 	if impl.SayHello() != "Hello" {
 		t.Error("Service logic failed")
 	}
 
-	// 获取接口实例 (通过 BindWith 绑定)
-	svcInterface, err := container.GetByType(di.TypeOf[IService]())
+	// 获取接口实例
+	svcInterface, err := di.Resolve[IService](container)
 	if err != nil {
 		t.Fatalf("Failed to get IService: %v", err)
 	}
-	if svcInterface.(IService).SayHello() != "Hello" {
+	if svcInterface.SayHello() != "Hello" {
 		t.Error("Interface logic failed")
 	}
 

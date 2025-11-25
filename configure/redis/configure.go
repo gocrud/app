@@ -25,17 +25,12 @@ func Configure(options func(*Builder)) core.Configurator {
 
 		// 注册 factory 到容器
 		if factory != nil {
-			ctx.ProvideValue(di.ValueProvider{
-				Provide: di.TypeOf[*RedisClientFactory](),
-				Value:   factory,
-			})
+			// Register factory
+			di.Register[*RedisClientFactory](ctx.Container(), di.WithValue(factory))
 
 			// 如果有默认客户端，也单独注册
 			if defaultClient, err := factory.Get("default"); err == nil {
-				ctx.ProvideValue(di.ValueProvider{
-					Provide: di.TypeOf[*redis.Client](),
-					Value:   defaultClient,
-				})
+				di.Register[*redis.Client](ctx.Container(), di.WithValue(defaultClient))
 				ctx.GetLogger().Info("Default redis client registered to DI container")
 			}
 

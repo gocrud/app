@@ -25,17 +25,12 @@ func Configure(options func(*Builder)) core.Configurator {
 
 		// 注册 factory 到容器
 		if factory != nil {
-			ctx.ProvideValue(di.ValueProvider{
-				Provide: di.TypeOf[*EtcdClientFactory](),
-				Value:   factory,
-			})
+			// Register factory
+			di.Register[*EtcdClientFactory](ctx.Container(), di.WithValue(factory))
 
 			// 如果有默认客户端，也单独注册
 			if defaultClient, err := factory.Get("default"); err == nil {
-				ctx.ProvideValue(di.ValueProvider{
-					Provide: di.TypeOf[*clientv3.Client](),
-					Value:   defaultClient,
-				})
+				di.Register[*clientv3.Client](ctx.Container(), di.WithValue(defaultClient))
 				ctx.GetLogger().Info("Default etcd client registered to DI container")
 			}
 

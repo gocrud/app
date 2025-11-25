@@ -1,88 +1,67 @@
 package main
 
-import "github.com/gocrud/app/di"
+import (
+	"fmt"
 
-// 定义接口
-type Logger interface {
-	Log(msg string)
+	"github.com/gocrud/app/di"
+)
+
+// 1. Define Interfaces
+type Greeter interface {
+	Greet(name string) string
 }
 
-type Database interface {
-	Connect() error
-}
-
-// 实现
-type ConsoleLogger struct {
+// 2. Implement Services
+type EnglishGreeter struct {
 	Prefix string
 }
 
-func (c *ConsoleLogger) Log(msg string) {
-	println(c.Prefix + ": " + msg)
+func (g *EnglishGreeter) Greet(name string) string {
+	return fmt.Sprintf("%s %s!", g.Prefix, name)
 }
 
-type MySQLDatabase struct {
-	Host string
-	Port int
+type UserController struct {
+	Greeter Greeter `di:""` // Auto injection
 }
 
-func (m *MySQLDatabase) Connect() error {
-	println("Connecting to MySQL at", m.Host, ":", m.Port)
-	return nil
-}
-
-// 服务
-type UserService struct {
-	Logger Logger   `di:""`
-	DB     Database `di:""`
-}
-
-type IInt interface {
-	Value() int
-}
-
-type Int int
-
-func (i Int) Value() int {
-	return int(i)
+func (c *UserController) SayHi() {
+	fmt.Println(c.Greeter.Greet("Developer"))
 }
 
 func main() {
-	// 创建容器实例
-	container := di.NewContainer()
+	// 1. Create Container
+	c := di.NewContainer()
 
-	// 使用 BindWith 绑定接口到实现
-	di.BindWith[Logger](container, &ConsoleLogger{Prefix: "APP"})
-	di.BindWith[Database](container, &MySQLDatabase{Host: "localhost", Port: 3306})
-	di.BindWith[IInt](container, Int(42))
+	// 2. Register Services
 
-	// 注册服务
-	container.Provide(&UserService{})
+	// Register a value
+	di.Register[string](c, di.WithValue("Hello"))
 
-	// 构建容器
-	if err := container.Build(); err != nil {
+	// Register implementation (via factory to consume string value)
+	di.Register[*EnglishGreeter](c, di.WithFactory(func(prefix string) *EnglishGreeter {
+		return &EnglishGreeter{Prefix: prefix}
+	}))
+
+	// Bind Interface to Implementation
+	// We use a factory to resolve the existing *EnglishGreeter singleton
+	// instead of creating a new empty instance via di.Use[*EnglishGreeter]().
+	di.Register[Greeter](c, di.WithFactory(func(g *EnglishGreeter) Greeter {
+		return g
+	}))
+
+	// Register Controller (Transient)
+	di.Register[*UserController](c, di.WithTransient())
+
+	// 3. Build
+	if err := c.Build(); err != nil {
 		panic(err)
 	}
 
-	// 使用 Inject 获取服务
-	println("\n=== 使用 container.Inject 获取服务 ===")
-	var svc *UserService
-	container.Inject(&svc)
-	svc.Logger.Log("UserService initialized")
-	svc.DB.Connect()
+	// 4. Resolve & Use
+	controller, err := di.Resolve[*UserController](c)
+	if err != nil {
+		panic(err)
+	}
 
-	var intVal IInt
-	container.Inject(&intVal)
-	println("Injected int value:", intVal.Value())
-
-	// 批量注入示例
-	println("\n=== 批量注入示例 ===")
-	var (
-		logger Logger
-		db     Database
-	)
-	container.Inject(&logger)
-	container.Inject(&db)
-
-	logger.Log("Logger injected")
-	db.Connect()
+	controller.SayHi() // Output: Hello Developer!
 }

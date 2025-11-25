@@ -160,26 +160,42 @@ type Host struct {
 	logger logging.Logger
 }
 
-// StartAsync 启动 Web 主机
-func (h *Host) StartAsync(ctx context.Context) error {
+// Start 启动 Web 主机
+func (h *Host) Start(ctx context.Context) error {
 	h.logger.Info("Starting web host",
 		logging.Field{Key: "port", Value: h.port})
 
+	// 启动服务器（阻塞调用）
+	// 在单独的 goroutine 中监听关闭信号
+	
+	errCh := make(chan error, 1)
 	go func() {
 		if err := h.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			h.logger.Error("Web host error",
-				logging.Field{Key: "error", Value: err.Error()})
+			errCh <- err
 		}
+		close(errCh)
 	}()
-
+	
 	h.logger.Info("Web host started",
 		logging.Field{Key: "address", Value: h.server.Addr})
 
-	return nil
+	// 等待错误或上下文取消
+	select {
+	case err := <-errCh:
+		if err != nil {
+			h.logger.Error("Web host error",
+				logging.Field{Key: "error", Value: err.Error()})
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		// 上下文取消，触发关闭
+		return nil // Stop 会负责关闭
+	}
 }
 
-// StopAsync 停止 Web 主机
-func (h *Host) StopAsync(ctx context.Context) error {
+// Stop 停止 Web 主机
+func (h *Host) Stop(ctx context.Context) error {
 	h.logger.Info("Stopping web host")
 
 	if err := h.server.Shutdown(ctx); err != nil {
