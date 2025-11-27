@@ -97,6 +97,11 @@ func (b *ConfigurationBuilder) AddInMemory(data map[string]any) *ConfigurationBu
 	return b.Add(&InMemorySource{Data: data})
 }
 
+// AddCommandLine 添加命令行参数配置源
+func (b *ConfigurationBuilder) AddCommandLine(args []string) *ConfigurationBuilder {
+	return b.Add(&CommandLineSource{Args: args})
+}
+
 // EtcdOptions etcd 配置选项
 type EtcdOptions struct {
 	Endpoints   []string      // etcd 服务器地址列表
@@ -599,6 +604,43 @@ func (s *YamlFileSource) StopWatch() {
 	// 无需操作
 }
 
+// CommandLineSource 命令行参数配置源
+type CommandLineSource struct {
+	Args []string
+}
+
+func (s *CommandLineSource) Name() string {
+	return fmt.Sprintf("CommandLine(%v)", s.Args)
+}
+
+func (s *CommandLineSource) Load() (map[string]any, error) {
+	result := make(map[string]any)
+
+	for _, arg := range s.Args {
+		// 简单的 --key=value 解析
+		if strings.HasPrefix(arg, "--") {
+			parts := strings.SplitN(strings.TrimPrefix(arg, "--"), "=", 2)
+			if len(parts) == 2 {
+				key := strings.ToLower(parts[0])
+				value := parts[1]
+
+				// 支持嵌套 key: "redis:host=localhost"
+				// 统一转换为点分隔符以保持一致性
+				key = strings.ReplaceAll(key, ":", ".")
+				setNestedValue(result, key, value)
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func (s *CommandLineSource) StartWatch(ctx context.Context, onChange func()) error {
+	return nil
+}
+
+func (s *CommandLineSource) StopWatch() {}
+
 // EnvironmentVariableSource 环境变量配置源
 type EnvironmentVariableSource struct {
 	Prefix string
@@ -632,8 +674,10 @@ func (s *EnvironmentVariableSource) Load() (map[string]any, error) {
 		// 转换为小写（保持与 JSON 配置一致）
 		key = strings.ToLower(key)
 
-		// 将 _ 转换为 :
-		key = strings.ReplaceAll(key, "_", ":") // 设置嵌套值
+		// 将 __ 转换为 : (作为层级分隔符)
+		key = strings.ReplaceAll(key, "__", ":")
+
+		// 注意：单个 _ 不会被替换，保留作为单词分隔符
 		setNestedValue(result, key, value)
 	}
 
@@ -680,7 +724,7 @@ func (s *InMemorySource) StopWatch() {
 
 // setNestedValue 设置嵌套值
 func setNestedValue(data map[string]any, path string, value any) {
-	parts := strings.Split(path, ":")
+	parts := strings.Split(strings.ReplaceAll(path, ".", ":"), ":")
 	current := data
 
 	for i := 0; i < len(parts)-1; i++ {

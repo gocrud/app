@@ -1,6 +1,15 @@
-# GoCRUD 应用框架 - 快速开始指南
+# Gocrud App Framework
 
-这是一个基于依赖注入的 Go 应用程序框架，提供了缓存、定时任务等常用功能的快速集成。
+**app** 是一个现代化、模块化、高性能的 Go 语言应用程序框架，专为构建可扩展的后端服务而设计。它深受 .NET Core 架构的启发，提供了一套优雅的依赖注入（DI）、配置管理、日志记录和托管服务生命周期管理机制。
+
+## ✨ 核心特性
+
+*   **🏗️ 模块化架构**: 采用 `ApplicationBuilder` 模式，通过 `Extension` 机制轻松扩展功能。
+*   **💉 依赖注入**: 内置强大的泛型 DI 容器，支持构造函数自动注入、属性注入，支持 `Singleton`, `Scoped`, `Transient` 生命周期。
+*   **⚙️ 配置系统**: 支持 JSON, YAML, 环境变量, 命令行参数等多种配置源，支持热重载（Reloadable）和选项模式（Options Pattern）。
+*   **📝 结构化日志**: 内置高性能结构化日志，支持 Log Level 控制、异步写入和多种输出格式。
+*   **🔄 托管服务**: 提供 `HostedService` 接口，轻松管理后台任务（Worker）、定时任务（Cron）和 Web 服务器的生命周期（启动/优雅停止）。
+*   **🔌 扩展生态**: 内置 Redis, Etcd, Cron, Web (Gin) 等常用组件的扩展支持。
 
 ## 📦 安装
 
@@ -8,9 +17,9 @@
 go get github.com/gocrud/app
 ```
 
-## 🚀 快速上手
+## 🚀 快速开始
 
-### 第一步：创建最简单的应用
+### 1. 创建最简单的应用
 
 ```go
 package main
@@ -18,233 +27,179 @@ package main
 import "github.com/gocrud/app"
 
 func main() {
+    // 1. 创建构建器
     builder := app.NewApplicationBuilder()
-    application := builder.Build()
-    application.Run()
-}
-```
-
-运行：
-```bash
-go run main.go
-```
-
-恭喜！你已经创建了第一个 GoCRUD 应用。
-
----
-
-## 🔴 添加 Redis 缓存
-
-### 配置 Redis
-
-```go
-import (
-    "github.com/gocrud/app/configure/redis"
-    redisclient "github.com/redis/go-redis/v9"
-)
-
-// 在 main 函数中配置 Redis
-builder.Configure(redis.Configure(func(b *redis.Builder) {
-    b.AddClient("default", func(opts *redis.RedisClientOptions) {
-        opts.Addr = "localhost:6379"
-        opts.Password = ""  // 如果有密码就填写
-        opts.DB = 0
-    })
-}))
-```
-
-### 创建缓存服务
-
-```go
-import (
-    "context"
-    "encoding/json"
-    "fmt"
-    "time"
-    redisclient "github.com/redis/go-redis/v9"
-)
-
-// CacheService - 通用缓存服务
-type CacheService struct {
-    redis *redisclient.Client  // 框架会自动注入
-}
-
-// 构造函数（框架会自动调用并注入依赖）
-func NewCacheService(redis *redisclient.Client) *CacheService {
-    return &CacheService{redis: redis}
-}
-
-// ... 实现 Set/Get 方法 ...
-```
-
-### 业务服务示例
-
-```go
-// UserService - 使用缓存的用户服务
-type UserService struct {
-    cache *CacheService  // 依赖缓存服务
-}
-
-// 构造函数（框架会自动注入 CacheService）
-func NewUserService(cache *CacheService) *UserService {
-    return &UserService{cache: cache}
-}
-```
-
-### 注册和使用服务
-
-```go
-package main
-
-import (
-    "context"
-    "fmt"
     
-    "github.com/gocrud/app"
-    "github.com/gocrud/app/configure/redis"
-    "github.com/gocrud/app/core"
-    "github.com/gocrud/app/di"
-)
+    // 2. 注册简单的后台任务
+    builder.AddTask(func(ctx context.Context) error {
+        println("Hello, App Framework!")
+        return nil
+    })
 
+    // 3. 构建并运行
+    app := builder.Build()
+    app.Run() 
+}
+```
+
+### 2. 模块化开发 (推荐)
+
+使用 `Extension` 机制来组织您的业务代码。
+
+```go
+// modules/user/module.go
+type UserModule struct {}
+
+func (m *UserModule) Name() string { return "UserModule" }
+
+// 注册服务 (DI)
+func (m *UserModule) ConfigureServices(services *core.ServiceCollection) {
+    core.AddScoped[IUserService](services, di.Use[*UserService]())
+    core.AddSingleton[*UserRepository](services)
+}
+
+// 配置应用 (Context)
+func (m *UserModule) ConfigureBuilder(ctx *core.BuildContext) {
+    // 绑定配置
+    core.ConfigureOptions[UserOptions](ctx, "users")
+    
+    // 注册后台清理任务
+    ctx.AddHostedService(NewUserCleanupWorker())
+}
+
+// main.go
 func main() {
-    builder := app.NewApplicationBuilder()
-    
-    // 1. 配置 Redis
-    builder.Configure(redis.Configure(func(b *redis.Builder) {
-        b.AddClient("default", func(opts *redis.RedisClientOptions) {
-            opts.Addr = "localhost:6379"
-        })
-    }))
-    
-    // 2. 注册服务（使用泛型 API）
-    builder.ConfigureServices(func(services *core.ServiceCollection) {
-        // 注册具体服务 (默认单例)
-        core.AddSingleton[*CacheService](services, di.WithFactory(NewCacheService))
-        core.AddSingleton[*UserService](services, di.WithFactory(NewUserService))
-        
-        // 如果需要绑定接口:
-        // core.AddSingleton[IUserService](services, di.Use[*UserService]())
-    })
-    
-    application := builder.Build()
-    
-    // 3. 获取并使用服务
-    var userService *UserService
-    application.GetService(&userService)
-    
-    // 或者直接从容器获取
-    // userService := di.MustResolve[*UserService](application.Services())
-    
-    application.Run()
+    app.NewApplicationBuilder().
+        AddExtension(&UserModule{}). // 注册业务模块
+        Build().
+        Run()
 }
 ```
 
-### 依赖注入说明
+## 💡 核心功能详解
 
-框架会自动处理依赖注入：
+### 依赖注入 (Dependency Injection)
 
-1. **注册**: 使用 `core.AddSingleton[T]` 或 `di.Register[T]` 注册服务。
-2. **注入**: 构造函数参数会自动从容器中解析并注入。
-3. **获取**: 使用 `application.GetService(&ptr)` 或 `di.Resolve[T](container)` 获取实例。
-
-**关键点：**
-- ✅ **泛型优先**：注册和获取时使用泛型 `[T]` 指定类型。
-- ✅ **自动注入**：构造函数参数按类型自动匹配。
-- ✅ **生命周期**：支持 Singleton (单例)、Transient (瞬态)、Scoped (作用域)。
-
----
-
-## ⏰ 添加定时任务
-
-```go
-import (
-    "github.com/gocrud/app/configure/cron"
-)
-
-builder.Configure(cron.Configure(func(b *cron.Builder) {
-    // 支持依赖注入的任务
-    b.AddJobWithDI("0 */1 * * * *", "清理任务", func(svc *UserService) {
-        svc.Cleanup()
-    })
-}))
-```
-
----
-
-## ⚙️ 配置文件系统
-
-（此处保留原有配置文档，配置系统 API 未发生重大破坏性变更）
-
-### 完整配置示例
-
-（保留...）
-
-##  依赖注入与服务获取
-
-### 获取服务实例
-
-框架提供了两种方式来获取已注册的服务：
-
-#### 1. 通过 Application 获取
-
-```go
-application := builder.Build()
-
-var myService *MyService
-application.GetService(&myService) // 必须传递指针的地址
-```
-
-#### 2. 通过容器直接解析 (推荐)
-
-使用新的泛型 API，更加安全简便：
-
-```go
-container := application.Services()
-
-// 安全获取 (返回 error)
-svc, err := di.Resolve[*MyService](container)
-
-// 强制获取 (失败 Panic)
-svc = di.MustResolve[*MyService](container)
-```
-
-### 服务生命周期注册
+框架核心基于 `di` 包，支持完全的泛型操作。
 
 ```go
 builder.ConfigureServices(func(s *core.ServiceCollection) {
-    // Singleton - 单例
-    core.AddSingleton[*MyService](s) 
+    // 注册单例
+    core.AddSingleton[*RedisCache](s)
     
-    // Scoped - 作用域
-    core.AddScoped[*RequestService](s)
+    // 注册接口实现
+    core.AddScoped[IUserService](s, di.Use[*UserService]())
     
-    // Transient - 瞬态
-    core.AddTransient[*TempService](s)
+    // 注册工厂方法
+    core.AddTransient[*OrderService](s, di.WithFactory(func(cache *RedisCache) *OrderService {
+        return NewOrderService(cache)
+    }))
 })
 ```
 
-### 注意事项
+### 配置系统 (Configuration)
 
-- ⚠️ **泛型类型匹配**：注册时的 `[T]` 必须与构造函数返回类型或字段类型严格匹配（包括指针 `*`）。
-- ⚠️ **指针注入**：使用 `GetService` 时必须传递指针的地址 `&svc`。
+支持多层级配置覆盖：`appsettings.json` < `Environment Variables` < `Command Line Args`。
 
----
+**配置文件 (config.yaml):**
+```yaml
+app:
+  name: "MyApp"
+  port: 8080
+redis:
+  host: "localhost"
+```
 
-## 📖 详细文档
+**使用 Options 模式:**
+```go
+type AppSettings struct {
+    Name string `json:"name"`
+    Port int    `json:"port"`
+}
 
-- [DI 框架详细文档](di/README.md)
-- [Cron 配置模块详细文档](configure/cron/README.md)
-- [Redis 配置模块详细文档](configure/redis/README.md)
-- [ETCD 配置模块详细文档](configure/etcd/README.md)
+// 注册
+core.AddOptions[AppSettings](builder, "app")
 
----
+// 使用 (注入 IOptions[T])
+type Server struct {
+    options config.Option[AppSettings]
+}
 
-## 💡 下一步
+func NewServer(opts config.Option[AppSettings]) *Server {
+    fmt.Println(opts.Value.Name) // "MyApp"
+    return &Server{options: opts}
+}
+```
 
-- 添加 Web 路由和控制器
-- 实现业务逻辑
-- 添加中间件
-- 配置日志
-- 部署到生产环境
+### 托管服务 (Hosted Services)
 
-现在您已经掌握了基础用法，可以开始构建自己的应用了！
+实现 `HostedService` 接口来创建随应用启动和停止的后台服务。
+
+```go
+type MyWorker struct {}
+
+func (w *MyWorker) Start(ctx context.Context) error {
+    go func() {
+        for {
+            select {
+            case <-ctx.Done():
+                return
+            default:
+                // Do work...
+                time.Sleep(1 * time.Second)
+            }
+        }
+    }()
+    return nil
+}
+
+func (w *MyWorker) Stop(ctx context.Context) error {
+    // Cleanup...
+    return nil
+}
+
+// 注册
+builder.Configure(func(ctx *core.BuildContext) {
+    ctx.AddHostedService(&MyWorker{})
+})
+```
+
+## 🔌 常用组件集成
+
+框架提供了丰富的扩展包：
+
+*   **Redis**: `github.com/gocrud/app/configure/redis`
+*   **Cron**: `github.com/gocrud/app/configure/cron`
+*   **Etcd**: `github.com/gocrud/app/configure/etcd`
+*   **Web (Gin)**: `github.com/gocrud/app/configure/web`
+
+**Web 服务示例:**
+
+```go
+import "github.com/gocrud/app/configure/web"
+
+builder.Configure(web.Configure(func(b *web.Builder) {
+    // 注册控制器 (支持 DI)
+    b.WithControllers(NewUserController) 
+    
+    // 配置端口
+    b.UsePort(8080)
+    
+    // 添加全局中间件
+    b.Use(MyAuthMiddleware)
+}))
+```
+
+## 📄 文档链接
+
+*   [DI 容器文档](di/README.md)
+*   [配置系统文档](config/README.md)
+*   [日志系统文档](logging/README.md)
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 📄 License
+
+MIT
