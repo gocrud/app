@@ -39,6 +39,27 @@ func (b *Builder) UsePort(port int) *Builder {
 	return b
 }
 
+// Use 使用全局中间件
+func (b *Builder) Use(middleware ...gin.HandlerFunc) *Builder {
+	b.engine.Use(middleware...)
+	return b
+}
+
+// Controller 简单的控制器接口标记
+type Controller interface {
+	// RegisterRoutes 注册路由
+	RegisterRoutes(router gin.IRouter)
+}
+
+// WithControllers 注册控制器 (Fluent API)
+// 注意：这里的控制器应该是已经初始化好的实例（支持通过 DI 获取）
+func (b *Builder) WithControllers(controllers ...Controller) *Builder {
+	for _, c := range controllers {
+		c.RegisterRoutes(b.engine)
+	}
+	return b
+}
+
 // Get 注册 GET 路由
 func (b *Builder) Get(path string, handlers ...gin.HandlerFunc) *Builder {
 	b.engine.GET(path, handlers...)
@@ -78,12 +99,6 @@ func (b *Builder) Any(path string, handlers ...gin.HandlerFunc) *Builder {
 // Group 创建路由组
 func (b *Builder) Group(relativePath string, handlers ...gin.HandlerFunc) *gin.RouterGroup {
 	return b.engine.Group(relativePath, handlers...)
-}
-
-// Use 使用全局中间件
-func (b *Builder) Use(middleware ...gin.HandlerFunc) *Builder {
-	b.engine.Use(middleware...)
-	return b
 }
 
 // Static 服务静态文件
@@ -167,7 +182,7 @@ func (h *Host) Start(ctx context.Context) error {
 
 	// 启动服务器（阻塞调用）
 	// 在单独的 goroutine 中监听关闭信号
-	
+
 	errCh := make(chan error, 1)
 	go func() {
 		if err := h.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -175,7 +190,7 @@ func (h *Host) Start(ctx context.Context) error {
 		}
 		close(errCh)
 	}()
-	
+
 	h.logger.Info("Web host started",
 		logging.Field{Key: "address", Value: h.server.Addr})
 
