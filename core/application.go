@@ -26,28 +26,29 @@ type Application interface {
 	Configuration() config.Configuration
 	Logger() logging.Logger
 	Environment() Environment
-	GetService(ptr interface{})
+	GetService(ptr any)
 }
 
 // ApplicationBuilder 应用程序构建器
 type ApplicationBuilder struct {
-	environment         string
-	configBuilder       *config.ConfigurationBuilder
-	loggingBuilder      *logging.LoggingBuilder
-	serviceConfigurator func(*ServiceCollection)
-	configurators       []Configurator
-	shutdownTimeout     time.Duration
-	mu                  sync.RWMutex
+	environment          string
+	configBuilder        *config.ConfigurationBuilder
+	loggingBuilder       *logging.LoggingBuilder
+	serviceConfigurators []func(*ServiceCollection)
+	configurators        []Configurator
+	shutdownTimeout      time.Duration
+	mu                   sync.RWMutex
 }
 
 // NewApplicationBuilder 创建应用程序构建器
 func NewApplicationBuilder() *ApplicationBuilder {
 	return &ApplicationBuilder{
-		environment:     "development",
-		configBuilder:   config.NewConfigurationBuilder(),
-		loggingBuilder:  logging.NewLoggingBuilder(),
-		configurators:   make([]Configurator, 0),
-		shutdownTimeout: 30 * time.Second,
+		environment:          "development",
+		configBuilder:        config.NewConfigurationBuilder(),
+		loggingBuilder:       logging.NewLoggingBuilder(),
+		serviceConfigurators: make([]func(*ServiceCollection), 0),
+		configurators:        make([]Configurator, 0),
+		shutdownTimeout:      30 * time.Second,
 	}
 }
 
@@ -83,7 +84,9 @@ func (b *ApplicationBuilder) ConfigureLogging(configure func(*logging.LoggingBui
 func (b *ApplicationBuilder) ConfigureServices(configure func(*ServiceCollection)) *ApplicationBuilder {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.serviceConfigurator = configure
+	if configure != nil {
+		b.serviceConfigurators = append(b.serviceConfigurators, configure)
+	}
 	return b
 }
 
@@ -100,6 +103,26 @@ func (b *ApplicationBuilder) Configure(configurators ...interface{}) *Applicatio
 		} else {
 			panic(fmt.Sprintf("configurator must be func(*BuildContext), got %T", c))
 		}
+	}
+
+	return b
+}
+
+// AddExtension 添加应用程序扩展
+func (b *ApplicationBuilder) AddExtension(ext Extension) *ApplicationBuilder {
+	validateExtension(ext)
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// 1. 注册服务配置器
+	if sc, ok := ext.(ServiceConfigurator); ok {
+		b.serviceConfigurators = append(b.serviceConfigurators, sc.ConfigureServices)
+	}
+
+	// 2. 注册应用构建配置器
+	if ac, ok := ext.(AppConfigurator); ok {
+		b.configurators = append(b.configurators, ac.ConfigureBuilder)
 	}
 
 	return b
@@ -197,8 +220,8 @@ func (b *ApplicationBuilder) Build() Application {
 	}
 
 	// 配置用户服务
-	if b.serviceConfigurator != nil {
-		b.serviceConfigurator(services)
+	for _, configurator := range b.serviceConfigurators {
+		configurator(services)
 	}
 
 	// 构建容器
