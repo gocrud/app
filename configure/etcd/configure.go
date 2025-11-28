@@ -11,7 +11,8 @@ import (
 // 使用示例: builder.Configure(etcd.Configure(func(b *etcd.Builder) { ... }))
 func Configure(options func(*Builder)) core.Configurator {
 	return func(ctx *core.BuildContext) {
-		builder := NewBuilder()
+		// 使用 BuildContext 初始化 Builder
+		builder := NewBuilder(ctx)
 		if options != nil {
 			options(builder)
 		}

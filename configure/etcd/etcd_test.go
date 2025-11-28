@@ -64,7 +64,10 @@ func TestEtcdConfiguration(t *testing.T) {
 
 func TestEtcdBuilder_Errors(t *testing.T) {
 	logger := logging.NewLogger()
-	builder := etcd.NewBuilder()
+	// Mock a BuildContext or pass nil if not used
+	// Since we refactored NewBuilder to require *BuildContext, we can pass nil for this isolated test
+	// assuming AddClient doesn't use ctx (which it doesn't currently).
+	builder := etcd.NewBuilder(nil)
 
 	// 添加无效配置
 	builder.AddClient("invalid", func(o *etcd.EtcdClientOptions) {

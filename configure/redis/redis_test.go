@@ -62,7 +62,8 @@ func TestRedisConfiguration(t *testing.T) {
 
 func TestRedisBuilder_Errors(t *testing.T) {
 	logger := logging.NewLogger()
-	builder := redis.NewBuilder()
+	// Pass nil context for isolated builder test
+	builder := redis.NewBuilder(nil)
 
 	// 添加无效配置
 	builder.AddClient("invalid", func(o *redis.RedisClientOptions) {

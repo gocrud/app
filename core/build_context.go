@@ -87,20 +87,20 @@ func ConfigureOptions[T any](ctx *BuildContext, section string) {
 
 	// 注册 Option[T] - Singleton（应用生命周期内不变）
 	di.Register[config.Option[T]](ctx.container,
-		di.WithValue(config.NewOption[T](cache.Get())),
+		di.WithValue(config.NewOption(cache.Get())),
 		di.WithSingleton(),
 	)
 
 	// 注册 OptionMonitor[T] - Singleton（实时更新，框架自动处理）
 	di.Register[config.OptionMonitor[T]](ctx.container,
-		di.WithValue(config.NewOptionMonitor[T](cache)),
+		di.WithValue(config.NewOptionMonitor(cache)),
 		di.WithSingleton(),
 	)
 
 	// 注册 OptionSnapshot[T] - Scoped（每个作用域创建时的快照）
 	di.Register[config.OptionSnapshot[T]](ctx.container,
 		di.WithFactory(func() config.OptionSnapshot[T] {
-			return config.NewOptionSnapshot[T](cache.Snapshot())
+			return config.NewOptionSnapshot(cache.Snapshot())
 		}),
 		di.WithScoped(),
 	)

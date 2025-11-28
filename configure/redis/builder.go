@@ -3,20 +3,23 @@ package redis
 import (
 	"fmt"
 
+	"github.com/gocrud/app/core"
 	"github.com/gocrud/app/logging"
 )
 
 // Builder Redis 客户端配置构建器
 type Builder struct {
+	core.BaseBuilder
 	configs map[string]RedisClientOptions
 	errors  []error
 }
 
 // NewBuilder 创建 Redis 构建器
-func NewBuilder() *Builder {
+func NewBuilder(ctx *core.BuildContext) *Builder {
 	return &Builder{
-		configs: make(map[string]RedisClientOptions),
-		errors:  make([]error, 0),
+		BaseBuilder: core.NewBaseBuilder(ctx),
+		configs:     make(map[string]RedisClientOptions),
+		errors:      make([]error, 0),
 	}
 }
 
