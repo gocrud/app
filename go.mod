@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/gin-gonic/gin v1.11.0
-	github.com/gocrud/mgo v1.1.0
+	github.com/gocrud/mgo v1.2.0
 	github.com/redis/go-redis/v9 v9.16.0
 	github.com/robfig/cron/v3 v3.0.0
 	github.com/stretchr/testify v1.11.1
