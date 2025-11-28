@@ -56,7 +56,7 @@ func (s *MyService) Process(orderId string) {
 ```go
 builder.ConfigureLogging(func(b *logging.LoggingBuilder) {
     // 设置最小日志级别
-    b.SetMinimumLevel(logging.InfoLevel)
+    b.SetMinimumLevel(logging.LogLevelInfo)
     
     // 添加控制台输出
     b.AddConsole()

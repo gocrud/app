@@ -9,7 +9,7 @@
 *   **⚙️ 配置系统**: 支持 JSON, YAML, 环境变量, 命令行参数等多种配置源，支持热重载（Reloadable）和选项模式（Options Pattern）。
 *   **📝 结构化日志**: 内置高性能结构化日志，支持 Log Level 控制、异步写入和多种输出格式。
 *   **🔄 托管服务**: 提供 `HostedService` 接口，轻松管理后台任务（Worker）、定时任务（Cron）和 Web 服务器的生命周期（启动/优雅停止）。
-*   **🔌 扩展生态**: 内置 Redis, Etcd, Cron, Web (Gin) 等常用组件的扩展支持。
+*   **🔌 扩展生态**: 内置 Redis, MongoDB, Etcd, Cron, Web (Gin) 等常用组件的扩展支持。
 
 ## 📦 安装
 
@@ -24,7 +24,10 @@ go get github.com/gocrud/app
 ```go
 package main
 
-import "github.com/gocrud/app"
+import (
+    "context"
+    "github.com/gocrud/app"
+)
 
 func main() {
     // 1. 创建构建器
@@ -169,6 +172,8 @@ builder.Configure(func(ctx *core.BuildContext) {
 框架提供了丰富的扩展包：
 
 *   **Redis**: `github.com/gocrud/app/configure/redis`
+*   **MongoDB**: `github.com/gocrud/app/configure/mongodb`
+*   **Database (GORM)**: `github.com/gocrud/app/configure/database`
 *   **Cron**: `github.com/gocrud/app/configure/cron`
 *   **Etcd**: `github.com/gocrud/app/configure/etcd`
 *   **Web (Gin)**: `github.com/gocrud/app/configure/web`
@@ -190,11 +195,22 @@ builder.Configure(web.Configure(func(b *web.Builder) {
 }))
 ```
 
+**MongoDB 示例:**
+
+```go
+import "github.com/gocrud/app/configure/mongodb"
+
+builder.Configure(mongodb.Configure(func(b *mongodb.Builder) {
+    b.Add("default", "mongodb://localhost:27017/mydb", nil)
+}))
+```
+
 ## 📄 文档链接
 
 *   [DI 容器文档](di/README.md)
 *   [配置系统文档](config/README.md)
 *   [日志系统文档](logging/README.md)
+*   [MongoDB 模块](configure/mongodb/README.md)
 
 ## 🤝 贡献
 
