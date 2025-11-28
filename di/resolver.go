@@ -40,7 +40,8 @@ func (r *resolver) invokeFunction(c Container, fn any, schema *InjectionSchema) 
 
 	args := make([]reflect.Value, len(argTypes))
 	for i, argType := range argTypes {
-		argVal, err := c.Get(argType)
+		// 工厂函数目前不支持命名注入，因此使用空名称
+		argVal, err := c.GetNamed(argType, "")
 		if err != nil {
 			return nil, fmt.Errorf("参数 %d: %w", i, err)
 		}
@@ -102,7 +103,7 @@ func (r *resolver) injectFields(c Container, structVal reflect.Value, schema *In
 	// 使用预计算 schema 仅迭代需要注入的字段
 	for _, fieldInfo := range schema.Fields {
 		// 解析依赖
-		depVal, err := c.Get(fieldInfo.Type)
+		depVal, err := c.GetNamed(fieldInfo.Type, fieldInfo.ServiceName)
 		if err != nil {
 			if fieldInfo.Optional {
 				continue

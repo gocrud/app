@@ -28,11 +28,12 @@ func Configure(options func(*Builder)) core.Configurator {
 			// Register factory
 			di.Register[*RedisClientFactory](ctx.Container(), di.WithValue(factory))
 
-			// 如果有默认客户端，也单独注册
-			if defaultClient, err := factory.Get("default"); err == nil {
-				di.Register[*redis.Client](ctx.Container(), di.WithValue(defaultClient))
-				ctx.GetLogger().Info("Default redis client registered to DI container")
-			}
+			// 遍历所有客户端并注册到 DI 容器
+			factory.Each(func(name string, client *redis.Client) {
+				// 使用名称注册
+				di.Register[*redis.Client](ctx.Container(), di.WithName(name), di.WithValue(client))
+				ctx.GetLogger().Info("Redis client registered to DI", logging.Field{Key: "name", Value: name})
+			})
 
 			// 注册清理函数
 			ctx.SetCleanup("redis", func() {

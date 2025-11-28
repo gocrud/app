@@ -15,8 +15,11 @@ type Container interface {
 	// Build 构建依赖图并进行验证。
 	Build() error
 
-	// Get 检索请求类型的实例。
+	// Get 检索请求类型的实例（使用默认名称）。
 	Get(typ reflect.Type) (any, error)
+
+	// GetNamed 检索请求类型和名称的实例。
+	GetNamed(typ reflect.Type, name string) (any, error)
 
 	// CreateScope 为作用域实例创建一个新作用域。
 	CreateScope() Scope
@@ -28,7 +31,7 @@ type Container interface {
 // container 是具体的实现。
 type container struct {
 	mu              sync.RWMutex
-	definitions     map[reflect.Type]*ServiceDefinition
+	definitions     map[ServiceKey]*ServiceDefinition
 	built           atomic.Bool
 	serviceCountVal int
 
@@ -39,7 +42,7 @@ type container struct {
 // NewContainer 创建一个新的空容器。
 func NewContainer() Container {
 	return &container{
-		definitions: make(map[reflect.Type]*ServiceDefinition),
+		definitions: make(map[ServiceKey]*ServiceDefinition),
 		resolver:    newResolver(),
 	}
 }
@@ -53,11 +56,16 @@ func (c *container) Add(def *ServiceDefinition) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, exists := c.definitions[def.Type]; exists {
-		return fmt.Errorf("di: 服务 %v 已注册", def.Type)
+	key := ServiceKey{Type: def.Type, Name: def.Name}
+
+	if _, exists := c.definitions[key]; exists {
+		if def.Name == "" {
+			return fmt.Errorf("di: 服务 %v 已注册", def.Type)
+		}
+		return fmt.Errorf("di: 服务 %v (name=%s) 已注册", def.Type, def.Name)
 	}
 
-	c.definitions[def.Type] = def
+	c.definitions[key] = def
 	return nil
 }
 
@@ -98,11 +106,11 @@ func (c *container) Build() error {
 
 	// 2. 按拓扑顺序急切初始化单例
 	// 我们在锁外执行此操作，以避免 Get() 锁定时死锁。
-	for _, typ := range order {
-		def := c.definitions[typ]
+	for _, key := range order {
+		def := c.definitions[key]
 		if def.Scope == ScopeSingleton {
-			if _, err := c.Get(typ); err != nil {
-				return fmt.Errorf("di: 构建单例 %v 失败: %w", typ, err)
+			if _, err := c.GetNamed(key.Type, key.Name); err != nil {
+				return fmt.Errorf("di: 构建单例 %v (name=%s) 失败: %w", key.Type, key.Name, err)
 			}
 		}
 	}
@@ -112,16 +120,26 @@ func (c *container) Build() error {
 
 // Get 检索请求类型的实例。
 func (c *container) Get(typ reflect.Type) (any, error) {
+	return c.GetNamed(typ, "")
+}
+
+// GetNamed 检索请求类型和名称的实例。
+func (c *container) GetNamed(typ reflect.Type, name string) (any, error) {
 	if !c.built.Load() {
 		return nil, fmt.Errorf("di: 容器未构建")
 	}
 
+	key := ServiceKey{Type: typ, Name: name}
+
 	// 优化：构建后定义是不可变的，因此我们可以无锁读取。
 	// 这假设 c.built.Store(true) / Load() 提供了适当的内存屏障，Go 保证了这一点。
-	def, ok := c.definitions[typ]
+	def, ok := c.definitions[key]
 
 	if !ok {
-		return nil, fmt.Errorf("di: 未找到服务 %v", typ)
+		if name == "" {
+			return nil, fmt.Errorf("di: 未找到服务 %v", typ)
+		}
+		return nil, fmt.Errorf("di: 未找到服务 %v (name=%s)", typ, name)
 	}
 
 	// 单例：在定义本身上使用 sync.Once

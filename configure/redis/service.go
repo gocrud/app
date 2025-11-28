@@ -1,7 +1,6 @@
 package redis
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -94,32 +93,20 @@ func (f *RedisClientFactory) Register(opts RedisClientOptions) error {
 	// 创建客户端
 	client := redis.NewClient(config)
 
-	// 测试连接
-	ctx, cancel := context.WithTimeout(context.Background(), opts.DialTimeout)
-	defer cancel()
-
-	if err := client.Ping(ctx).Err(); err != nil {
-		client.Close()
-		return fmt.Errorf("failed to connect to redis: %w", err)
-	}
-
 	// 保存客户端
 	f.clients[opts.Name] = client
 
 	return nil
 }
 
-// Get 获取指定名称的 Redis 客户端
-func (f *RedisClientFactory) Get(name string) (*redis.Client, error) {
+// Each 遍历所有客户端
+func (f *RedisClientFactory) Each(fn func(name string, client *redis.Client)) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	client, exists := f.clients[name]
-	if !exists {
-		return nil, fmt.Errorf("redis client '%s' not found", name)
+	for name, client := range f.clients {
+		fn(name, client)
 	}
-
-	return client, nil
 }
 
 // Close 关闭所有 Redis 客户端

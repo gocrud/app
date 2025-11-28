@@ -103,17 +103,14 @@ func (f *EtcdClientFactory) Register(opts EtcdClientOptions) error {
 	return nil
 }
 
-// Get 获取指定名称的 etcd 客户端
-func (f *EtcdClientFactory) Get(name string) (*clientv3.Client, error) {
+// Each 遍历所有客户端
+func (f *EtcdClientFactory) Each(fn func(name string, client *clientv3.Client)) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	client, exists := f.clients[name]
-	if !exists {
-		return nil, fmt.Errorf("etcd client '%s' not found", name)
+	for name, client := range f.clients {
+		fn(name, client)
 	}
-
-	return client, nil
 }
 
 // Close 关闭所有 etcd 客户端

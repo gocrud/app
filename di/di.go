@@ -27,10 +27,15 @@ func Register[T any](c Container, opts ...Option) {
 
 // Resolve resolves an instance of type T from the container or scope.
 func Resolve[T any](c Container) (T, error) {
+	return ResolveNamed[T](c, "")
+}
+
+// ResolveNamed resolves an instance of type T with a specific name from the container or scope.
+func ResolveNamed[T any](c Container, name string) (T, error) {
 	var zero T
 	typ := reflect.TypeOf((*T)(nil)).Elem()
 
-	val, err := c.Get(typ)
+	val, err := c.GetNamed(typ, name)
 	if err != nil {
 		return zero, err
 	}
@@ -49,4 +54,3 @@ func Resolve[T any](c Container) (T, error) {
 
 	return zero, fmt.Errorf("di: resolved value is %T, expected %v", val, typ)
 }
-

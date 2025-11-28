@@ -45,16 +45,25 @@ func (s *scope) CreateScope() Scope {
 }
 
 func (s *scope) Get(typ reflect.Type) (any, error) {
+	return s.GetNamed(typ, "")
+}
+
+func (s *scope) GetNamed(typ reflect.Type, name string) (any, error) {
+	key := ServiceKey{Type: typ, Name: name}
+
 	// 1. 检查服务是否存在于父定义中
-	def, ok := s.parent.definitions[typ]
+	def, ok := s.parent.definitions[key]
 	if !ok {
-		return nil, fmt.Errorf("di: 未找到服务 %v", typ)
+		if name == "" {
+			return nil, fmt.Errorf("di: 未找到服务 %v", typ)
+		}
+		return nil, fmt.Errorf("di: 未找到服务 %v (name=%s)", typ, name)
 	}
 
 	// 2. 处理不同作用域
 	switch def.Scope {
 	case ScopeSingleton:
-		return s.parent.Get(typ)
+		return s.parent.GetNamed(typ, name)
 
 	case ScopeTransient:
 		// 使用此作用域作为容器创建新实例（用于依赖项）
