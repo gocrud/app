@@ -2,145 +2,223 @@ package tests
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"testing"
 	"time"
 
-	"github.com/gocrud/app"
+	"github.com/gin-gonic/gin"
 	"github.com/gocrud/app/config"
 	"github.com/gocrud/app/core"
 	"github.com/gocrud/app/di"
-	"github.com/gocrud/app/logging"
+	"github.com/gocrud/app/web"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
-// IService 定义一个测试服务接口
-type IService interface {
-	SayHello() string
+// MockDialector 最小化实现，跳过实际 DB 连接
+type MockDialector struct{}
+
+func (m MockDialector) Name() string                                                        { return "mock" }
+func (m MockDialector) Initialize(db *gorm.DB) error                                        { return nil }
+func (m MockDialector) Migrator(db *gorm.DB) gorm.Migrator                                  { return nil }
+func (m MockDialector) DataTypeOf(field *schema.Field) string                               { return "" }
+func (m MockDialector) DefaultValueOf(field *schema.Field) clause.Expression                { return clause.Expr{} }
+func (m MockDialector) BindVarTo(writer clause.Writer, stmt *gorm.Statement, v interface{}) {}
+func (m MockDialector) QuoteTo(writer clause.Writer, str string)                            {}
+func (m MockDialector) Explain(sql string, vars ...interface{}) string                      { return "" }
+
+// TestService 模拟业务服务
+type TestService struct {
+	DB     *gorm.DB             `di:""`
+	Config config.Configuration `di:""`
 }
 
-// ServiceImpl 实现测试服务接口
-type ServiceImpl struct {
-	// 使用 di 标签标记字段注入，? 表示可选
-	Config config.Configuration `di:"?"`
-	// 必须字段
-	Logger logging.Logger `di:""`
-}
-
-// NewServiceImpl 是 ServiceImpl 的构造函数
-func NewServiceImpl(logger logging.Logger) *ServiceImpl {
-	return &ServiceImpl{Logger: logger}
-}
-
-func (s *ServiceImpl) SayHello() string {
-	s.Logger.Info("Hello called")
-	return "Hello"
-}
-
-// TestAppIntegration 测试整个应用框架的集成情况
-// 包括：DI容器、配置读取、日志记录、应用生命周期
-func TestAppIntegration(t *testing.T) {
-	// 1. 创建应用构建器
-	builder := app.NewApplicationBuilder()
-
-	// 2. 配置 Configuration
-	builder.ConfigureConfiguration(func(cb *config.ConfigurationBuilder) {
-		// 使用内存配置源
-		cb.AddInMemory(map[string]any{
-			"app": map[string]any{
-				"name":    "IntegrationTest",
-				"version": 1,
-			},
-		})
-	})
-
-	// 3. 配置 Logging
-	builder.ConfigureLogging(func(lb *logging.LoggingBuilder) {
-		// 设置最低日志级别
-		lb.SetMinimumLevel(logging.LogLevelDebug)
-		// 添加控制台日志（内部使用了新实现的 AsyncWriter）
-		lb.AddConsole()
-	})
-
-	// 4. 配置 Services (DI)
-	builder.ConfigureServices(func(s *core.ServiceCollection) {
-		// 注册单例服务 (构造函数方式)
-		// 现在的 API: core.AddSingleton[*ServiceImpl](s, di.WithFactory(NewServiceImpl))
-		// 或者: core.AddSingleton[*ServiceImpl](s, di.Use(NewServiceImpl)) 如果可以推断
-		// 更明确的方式:
-		core.AddSingleton[*ServiceImpl](s, di.WithFactory(NewServiceImpl))
-
-		// 绑定接口到实现 (使用新的泛型语法糖)
-		// 绑定接口: core.AddSingleton[IService](s, di.Use[*ServiceImpl]())
-		// 但是因为 *ServiceImpl 已经注册了，我们需要确保 IService 指向同一个单例？
-		// 如果我们再次使用 WithFactory(NewServiceImpl)，会创建第二个单例（除非我们有别名机制，目前 DI 好像没有显式的 Alias 支持，除了 Use[T]）。
-		// 如果我们使用 di.Use[*ServiceImpl]()，它会尝试解析 *ServiceImpl。
-		// 让我们试试绑定接口到具体实现类型。
-		core.AddSingleton[IService](s, di.Use[*ServiceImpl]())
-	})
-
-	// 5. 构建应用
-	application := builder.Build()
-
-	// 6. 验证配置 (Config 优化验证)
-	// 使用 Atomic 读取和 PathCache
-	val := application.Configuration().Get("app:name")
-	if val != "IntegrationTest" {
-		t.Errorf("Expected app:name = IntegrationTest, got %s", val)
+func (s *TestService) GetAppName() string {
+	if s.Config == nil {
+		return "no-config"
 	}
+	return s.Config.Get("app.name")
+}
 
-	ver, err := application.Configuration().GetInt("app:version")
-	if err != nil || ver != 1 {
-		t.Errorf("Expected app:version = 1, got %d (err: %v)", ver, err)
-	}
+// TestController 模拟控制器
+type TestController struct {
+	Service *TestService
+}
 
-	// 7. 验证依赖注入 (DI 优化验证)
-	container := application.Services()
+// NewTestController 使用构造函数注入
+func NewTestController(svc *TestService) *TestController {
+	return &TestController{Service: svc}
+}
 
-	// 获取实现类实例 (di.Resolve 替代 GetByType)
-	impl, err := di.Resolve[*ServiceImpl](container)
+func (c *TestController) MountRoutes(r gin.IRouter) {
+	r.GET("/ping", func(ctx *gin.Context) {
+		name := "unknown"
+		if c.Service != nil {
+			name = c.Service.GetAppName()
+		}
+		// Verify DB injection
+		if c.Service != nil && c.Service.DB == nil {
+			name += "-nodb"
+		}
+		ctx.String(200, "pong: "+name)
+	})
+}
+
+func TestIntegration(t *testing.T) {
+	rt := core.NewRuntime()
+
+	// 手动设置配置环境变量
+	t.Setenv("TEST_APP_NAME", "IntegrationTest")
+
+	// 应用模块
+	err := rt.Apply(
+		// 1. Config
+		func(rt *core.Runtime) error {
+			cfg := config.NewConfiguration()
+			// 加载环境变量
+			cfg.LoadEnv("TEST_")
+			// 注册到容器
+			di.ProvideService[config.Configuration](rt.Container, di.WithValue(cfg))
+			return nil
+		},
+
+		// 2. Database (Mock Component)
+		func(rt *core.Runtime) error {
+			mockDB := &gorm.DB{}
+			// 注册默认数据库
+			return rt.Provide(mockDB, di.WithValue(mockDB))
+		},
+
+		// 3. Web (Random Port)
+		web.New(web.WithControllers(NewTestController), web.WithPort(0)),
+	)
 	if err != nil {
-		t.Fatalf("Failed to get *ServiceImpl: %v", err)
-	}
-	if impl.SayHello() != "Hello" {
-		t.Error("Service logic failed")
+		t.Fatalf("Apply options failed: %v", err)
 	}
 
-	// 获取接口实例
-	svcInterface, err := di.Resolve[IService](container)
-	if err != nil {
-		t.Fatalf("Failed to get IService: %v", err)
-	}
-	if svcInterface.SayHello() != "Hello" {
-		t.Error("Interface logic failed")
+	// 注册业务服务
+	if err := rt.Provide(&TestService{}); err != nil {
+		t.Fatalf("Provide TestService failed: %v", err)
 	}
 
-	// 8. 验证应用运行生命周期 (Lifecycle)
-	// 使用带超时的 Context 模拟运行
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	// 构建容器
+	if err := rt.Container.Build(); err != nil {
+		t.Fatalf("Container build failed: %v", err)
+	}
+
+	// 启动应用
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// 异步运行
-	errChan := make(chan error)
-	go func() {
-		// RunAsync 应该会运行直到 context 取消或 Stop 被调用
-		errChan <- application.RunAsync(ctx)
-	}()
+	if err := rt.Lifecycle.Start(ctx, rt.Container); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	defer rt.Lifecycle.Stop(ctx)
 
-	// 让应用运行一小段时间
-	time.Sleep(100 * time.Millisecond)
-
-	// 停止应用
-	if err := application.Stop(context.Background()); err != nil {
-		t.Errorf("Stop failed: %v", err)
+	// 验证
+	host := core.GetFeature[*web.Host](rt)
+	if host == nil {
+		t.Fatal("Web Host feature not found")
 	}
 
-	// 等待退出
-	select {
-	case err := <-errChan:
-		// 正常退出或 context cancel 都是预期的
-		if err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-			t.Logf("RunAsync finished with error: %v", err)
+	addr := ""
+	for i := 0; i < 20; i++ {
+		addr = host.Address()
+		if addr != "" && addr != ":0" {
+			break
 		}
-	case <-time.After(1 * time.Second):
-		t.Error("Application did not stop in time")
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if addr == "" {
+		t.Fatal("Web Host address is empty after waiting")
+	}
+	t.Logf("Web Host running at %s", addr)
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/ping", addr))
+	if err != nil {
+		t.Fatalf("HTTP Get failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("Read body failed: %v", err)
+	}
+
+	expected := "pong: IntegrationTest"
+	if string(body) != expected {
+		t.Errorf("Expected body '%s', got '%s'", expected, string(body))
+	}
+}
+
+// TestWorker for HostedService test
+type TestWorker struct {
+	Started chan struct{}
+	Stopped chan struct{}
+	StopCh  chan struct{}
+}
+
+func (w *TestWorker) Start(ctx context.Context) error {
+	close(w.Started)
+	<-w.StopCh // 模拟阻塞直到 Stop 被调用
+	return nil
+}
+
+func (w *TestWorker) Stop(ctx context.Context) error {
+	close(w.StopCh)
+	// 模拟等待清理
+	time.Sleep(10 * time.Millisecond)
+	close(w.Stopped)
+	return nil
+}
+
+func TestHostedService(t *testing.T) {
+	rt := core.NewRuntime()
+
+	worker := &TestWorker{
+		Started: make(chan struct{}),
+		Stopped: make(chan struct{}),
+		StopCh:  make(chan struct{}),
+	}
+
+	err := rt.Apply(
+		// Register pre-initialized pointer
+		core.WithHostedService(worker),
+	)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	if err := rt.Container.Build(); err != nil {
+		t.Fatalf("Build failed: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := rt.Lifecycle.Start(ctx, rt.Container); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	select {
+	case <-worker.Started:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Worker should be started")
+	}
+
+	if err := rt.Lifecycle.Stop(ctx); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+
+	select {
+	case <-worker.Stopped:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Worker should be stopped")
 	}
 }

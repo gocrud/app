@@ -23,7 +23,7 @@ type ServiceC struct{}
 
 func (s *ServiceC) Do() string { return "C" }
 
-// ---------------- 测试 RegisterAuto 相关结构 ----------------
+// ---------------- 测试 Provide 相关结构 ----------------
 
 // AutoServiceA 用于测试构造函数注册
 type AutoServiceA struct {
@@ -57,32 +57,32 @@ type AutoServiceNoTag struct {
 func TestDI(t *testing.T) {
 	c := di.NewContainer()
 
-	// Register Value
-	di.Register[int](c, di.WithValue(100))
+	// Provide Value -> Provide Value
+	di.Provide(c, 100)
 
-	// Register Singleton
-	di.Register[*ServiceA](c, di.WithFactory(func(val int) *ServiceA {
+	// Provide Singleton -> Provide Factory
+	di.Provide(c, func(val int) *ServiceA {
 		return &ServiceA{Val: val}
-	}))
+	})
 
-	// Register Transient struct with field injection
-	di.Register[*ServiceB](c, di.WithTransient())
+	// Provide Transient struct -> Provide Type
+	di.Provide(c, reflect.TypeOf(&ServiceB{}), di.WithTransient())
 
-	// Register Interface
-	di.Register[InterfaceC](c, di.Use[*ServiceC]())
+	// Provide Interface -> Provide with Use
+	di.ProvideService[InterfaceC](c, di.Use[*ServiceC]())
 
 	err := c.Build()
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
-	// Resolve
-	b, err := di.Resolve[*ServiceB](c)
+	// Get -> Get
+	b, err := di.Get[*ServiceB](c)
 	if err != nil {
-		t.Fatalf("Resolve ServiceB failed: %v", err)
+		t.Fatalf("Get ServiceB failed: %v", err)
 	}
 	if b == nil {
-		t.Fatal("Resolved nil ServiceB")
+		t.Fatal("Get nil ServiceB")
 	}
 	if b.A == nil {
 		t.Fatal("Field injection failed: b.A is nil")
@@ -91,10 +91,10 @@ func TestDI(t *testing.T) {
 		t.Errorf("Expected 100, got %d", b.A.Val)
 	}
 
-	// Resolve Interface
-	iface, err := di.Resolve[InterfaceC](c)
+	// Get Interface -> Get Interface
+	iface, err := di.Get[InterfaceC](c)
 	if err != nil {
-		t.Fatalf("Resolve InterfaceC failed: %v", err)
+		t.Fatalf("Get InterfaceC failed: %v", err)
 	}
 	if iface.Do() != "C" {
 		t.Errorf("Expected 'C', got '%s'", iface.Do())
@@ -109,16 +109,16 @@ func TestScope(t *testing.T) {
 	}
 
 	counter := 0
-	di.Register[*ScopedService](c, di.WithScoped(), di.WithFactory(func() *ScopedService {
+	di.Provide(c, func() *ScopedService {
 		counter++
 		return &ScopedService{ID: counter}
-	}))
+	}, di.WithScoped())
 
 	c.Build()
 
 	scope1 := c.CreateScope()
-	s1a, _ := di.Resolve[*ScopedService](scope1)
-	s1b, _ := di.Resolve[*ScopedService](scope1)
+	s1a, _ := di.Get[*ScopedService](scope1)
+	s1b, _ := di.Get[*ScopedService](scope1)
 
 	if s1a.ID != s1b.ID {
 		t.Errorf("Expected same instance in scope 1, got IDs %d and %d", s1a.ID, s1b.ID)
@@ -128,7 +128,7 @@ func TestScope(t *testing.T) {
 	}
 
 	scope2 := c.CreateScope()
-	s2a, _ := di.Resolve[*ScopedService](scope2)
+	s2a, _ := di.Get[*ScopedService](scope2)
 	if s2a.ID != 2 {
 		t.Errorf("Expected ID 2, got %d", s2a.ID)
 	}
@@ -137,11 +137,11 @@ func TestScope(t *testing.T) {
 	}
 }
 
-func TestRegisterAuto(t *testing.T) {
+func TestProvide(t *testing.T) {
 	c := di.NewContainer()
 
 	// 1. 注册构造函数 (无依赖)
-	typA, err := di.RegisterAuto(c, NewAutoServiceA)
+	typA, err := di.Provide(c, NewAutoServiceA)
 	if err != nil {
 		t.Fatalf("Failed to auto register A: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestRegisterAuto(t *testing.T) {
 	}
 
 	// 2. 注册构造函数 (有依赖)
-	typB, err := di.RegisterAuto(c, NewAutoServiceB)
+	typB, err := di.Provide(c, NewAutoServiceB)
 	if err != nil {
 		t.Fatalf("Failed to auto register B: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestRegisterAuto(t *testing.T) {
 	// 3. 注册实例指针 (带 Tag，智能检测应自动开启注入)
 	// 手动创建一个部分初始化的对象
 	instanceWithTag := &AutoServiceWithTag{Data: "manual-data"}
-	typTag, err := di.RegisterAuto(c, instanceWithTag)
+	typTag, err := di.Provide(c, instanceWithTag)
 	if err != nil {
 		t.Fatalf("Failed to auto register Tag Instance: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRegisterAuto(t *testing.T) {
 	type AutoServiceC struct {
 		Val string
 	}
-	typC, err := di.RegisterAuto(c, reflect.TypeOf(&AutoServiceC{})) // 注册 *AutoServiceC
+	typC, err := di.Provide(c, reflect.TypeOf(&AutoServiceC{})) // 注册 *AutoServiceC
 	if err != nil {
 		t.Fatalf("Failed to auto register Type: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestRegisterAuto(t *testing.T) {
 	// --- 验证 ---
 
 	// 验证构造函数注入
-	svcB, err := di.Resolve[*AutoServiceB](c)
+	svcB, err := di.Get[*AutoServiceB](c)
 	if err != nil {
 		t.Fatalf("Resolve B failed: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestRegisterAuto(t *testing.T) {
 	}
 
 	// 验证实例字段注入 (智能检测)
-	svcTag, err := di.Resolve[*AutoServiceWithTag](c)
+	svcTag, err := di.Get[*AutoServiceWithTag](c)
 	if err != nil {
 		t.Fatalf("Resolve Tag Instance failed: %v", err)
 	}
@@ -217,53 +217,53 @@ func TestWithFieldsOption(t *testing.T) {
 	c := di.NewContainer()
 
 	// 准备依赖
-	di.RegisterAuto(c, NewAutoServiceA)
-	di.RegisterAuto(c, NewAutoServiceB)
+	di.Provide(c, NewAutoServiceA)
+	di.Provide(c, NewAutoServiceB)
 
 	// 场景 1: 显式使用 WithFields
 	// 即使结构体有 tag，我们显式加个 option 看看是否冲突（应正常工作）
 	instance1 := &AutoServiceWithTag{Data: "explicit"}
-	di.RegisterAuto(c, instance1, di.WithFields())
+	di.Provide(c, instance1, di.WithFields())
 
 	// 场景 2: 如果没有 tag，WithFields 也没用（但也不应报错）
 	// AutoServiceA 没有 di tag
 	instance2 := &AutoServiceA{Val: "no-tag"}
-	di.RegisterAuto(c, instance2, di.WithFields())
+	di.Provide(c, instance2, di.WithFields())
 
 	if err := c.Build(); err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
 
 	// 验证场景 1
-	svc1, _ := di.Resolve[*AutoServiceWithTag](c)
+	svc1, _ := di.Get[*AutoServiceWithTag](c)
 	if svc1.B == nil {
 		t.Error("Explicit WithFieldInjection failed to inject")
 	}
 
 	// 验证场景 2
-	svc2, _ := di.Resolve[*AutoServiceA](c) // 注意：这里会覆盖上面的 NewAutoServiceA 注册的单例吗？
-	// Container Add 重复注册会报错，但在上面的 RegisterAuto 中如果没有处理错误，可能会覆盖或失败。
+	svc2, _ := di.Get[*AutoServiceA](c) // 注意：这里会覆盖上面的 NewAutoServiceA 注册的单例吗？
+	// Container Add 重复注册会报错，但在上面的 Provide 中如果没有处理错误，可能会覆盖或失败。
 	// 实际上 di.container.Add 会报错。
-	// 所以上面的 RegisterAuto 调用应该会失败或者我们需要分开测试。
+	// 所以上面的 Provide 调用应该会失败或者我们需要分开测试。
 	// 由于上面的测试逻辑是在同一个 container 中，我们应该小心重复注册。
 	// 让我们重新建一个 container 来测这个特定场景。
 	if svc2.Val != "auto-A" {
-		// 如果上面的 RegisterAuto(instance2) 成功了（假设它覆盖了，或者我们没测 error），
+		// 如果上面的 Provide(instance2) 成功了（假设它覆盖了，或者我们没测 error），
 		// 它的值应该是 "no-tag"。但实际上 di 库不允许重复注册 key。
-		// 我们在 RegisterAuto 的实现中是 return c.Add(def)，Add 会报错。
+		// 我们在 Provide 的实现中是 return c.Add(def)，Add 会报错。
 		// 所以这里的 svc2 应该是第一次注册的 (NewAutoServiceA) 产生的实例。
-		// 除非 RegisterAuto 这里的 key (Type) 和 NewAutoServiceA 的 Type 不一样？
+		// 除非 Provide 这里的 key (Type) 和 NewAutoServiceA 的 Type 不一样？
 		// NewAutoServiceA 返回 *AutoServiceA。 instance2 也是 *AutoServiceA。
-		// 所以上面的 RegisterAuto(c, instance2) 其实应该返回了 error。
+		// 所以上面的 Provide(c, instance2) 其实应该返回了 error。
 	}
 }
 
-func TestRegisterAutoDuplicates(t *testing.T) {
+func TestProvideDuplicates(t *testing.T) {
 	c := di.NewContainer()
-	di.RegisterAuto(c, NewAutoServiceA)
+	di.Provide(c, NewAutoServiceA)
 
 	// 尝试重复注册
-	_, err := di.RegisterAuto(c, &AutoServiceA{})
+	_, err := di.Provide(c, &AutoServiceA{})
 	if err == nil {
 		t.Error("Expected error when registering duplicate service, got nil")
 	}

@@ -5,37 +5,38 @@ import (
 	"reflect"
 )
 
-// RegisterAuto 智能注册服务。
-// 它可以接受构造函数、结构体指针或类型，并自动推断服务类型和注册方式。
+// Provide registers a service automatically.
+// It accepts a constructor function, a struct pointer, a reflect.Type, or any value (as Singleton).
 //
-// 支持的输入 target 类型:
-// 1. func(...) (Service, error?) -> 注册为 Factory，ServiceType 为第一个返回值。
-// 2. *Struct                      -> 注册为 Value (Singleton)，ServiceType 为 *Struct。
-//   - 如果结构体包含带有 `di` 标签的字段，会自动启用 WithFields。
+// Supported targets:
+// 1. func(...) (Service, error?) -> Registered as Factory. ServiceType is the first return value.
+// 2. *Struct                      -> Registered as Value (Singleton). ServiceType is *Struct.
+//   - If struct has fields with `di` tag, field injection is enabled.
 //
-// 3. reflect.Type                 -> 注册为 Implementation (Struct注入)，ServiceType 为该 Type。
-func RegisterAuto(c Container, target any, opts ...Option) (reflect.Type, error) {
+// 3. reflect.Type                 -> Registered as Implementation (Struct injection). ServiceType is the Type.
+// 4. Any value                    -> Registered as Value (Singleton). ServiceType is TypeOf(value).
+func Provide(c Container, target any, opts ...Option) (reflect.Type, error) {
 	targetVal := reflect.ValueOf(target)
 	var def *ServiceDefinition
 	var serviceType reflect.Type
 
-	// 1. 处理 reflect.Type (类型注册)
+	// 1. Handle reflect.Type (Type registration)
 	if typeVal, ok := target.(reflect.Type); ok {
 		serviceType = typeVal
 		def = &ServiceDefinition{
 			Type:     serviceType,
-			Scope:    ScopeSingleton, // 默认单例
+			Scope:    ScopeSingleton, // Default singleton
 			ImplType: serviceType,
-			// IsFactory/IsValue 默认为 false，即 struct 注入模式
+			// IsFactory/IsValue default to false (struct injection)
 		}
 	} else if targetVal.Kind() == reflect.Func {
-		// 2. 处理 Function (构造函数)
+		// 2. Handle Function (Constructor)
 		fnType := targetVal.Type()
 		if fnType.NumOut() == 0 {
 			return nil, fmt.Errorf("di: constructor function must return at least one value")
 		}
 
-		// 推断服务类型为第一个返回值
+		// Infer service type from the first return value
 		serviceType = fnType.Out(0)
 
 		def = &ServiceDefinition{
@@ -45,8 +46,8 @@ func RegisterAuto(c Container, target any, opts ...Option) (reflect.Type, error)
 			IsFactory: true,
 		}
 	} else if targetVal.Kind() == reflect.Ptr {
-		// 3. 处理 Pointer (预初始化实例)
-		// 必须是指向结构体的指针，或者是接口（但在运行时 any->interface 会解包，这里通常是指针）
+		// 3. Handle Pointer (Pre-initialized instance)
+		// Must be a pointer to a struct
 		serviceType = targetVal.Type()
 
 		def = &ServiceDefinition{
@@ -56,7 +57,7 @@ func RegisterAuto(c Container, target any, opts ...Option) (reflect.Type, error)
 			IsValue: true,
 		}
 
-		// 智能检测：如果结构体有字段带 di 标签，则自动开启注入
+		// Smart detection: if struct has fields with `di` tag, enable field injection
 		if targetVal.Elem().Kind() == reflect.Struct {
 			elemType := targetVal.Elem().Type()
 			for i := 0; i < elemType.NumField(); i++ {
@@ -67,17 +68,22 @@ func RegisterAuto(c Container, target any, opts ...Option) (reflect.Type, error)
 			}
 		}
 	} else {
-		return nil, fmt.Errorf("di: unsupported auto-registration target type: %T", target)
+		// 4. Handle Value (Singleton) - Support for basic types (int, string) etc.
+		serviceType = targetVal.Type()
+		def = &ServiceDefinition{
+			Type:    serviceType,
+			Scope:   ScopeSingleton,
+			Impl:    target,
+			IsValue: true,
+		}
 	}
 
-	// 应用选项
+	// Apply options
 	for _, opt := range opts {
 		opt(def)
 	}
 
-	// 注册
-	// 注意：Add 方法如果发现 key 已存在会报错。
-	// 对于自动注册，有时可能需要忽略已存在的情况，但标准行为应与 Register 一致，即报错。
+	// Register
 	if err := c.Add(def); err != nil {
 		return nil, err
 	}
@@ -85,9 +91,9 @@ func RegisterAuto(c Container, target any, opts ...Option) (reflect.Type, error)
 	return serviceType, nil
 }
 
-// Register registers a service of type T with the container.
+// ProvideService registers a service of type T with the container.
 // If T is an interface, you must use di.Use[Impl]() to specify the implementation.
-func Register[T any](c Container, opts ...Option) {
+func ProvideService[T any](c Container, opts ...Option) {
 	typ := reflect.TypeOf((*T)(nil)).Elem()
 
 	def := &ServiceDefinition{
@@ -101,17 +107,17 @@ func Register[T any](c Container, opts ...Option) {
 	}
 
 	if err := c.Add(def); err != nil {
-		panic(fmt.Sprintf("di: failed to register %v: %v", typ, err))
+		panic(fmt.Sprintf("di: failed to provide %v: %v", typ, err))
 	}
 }
 
-// Resolve resolves an instance of type T from the container or scope.
-func Resolve[T any](c Container) (T, error) {
-	return ResolveNamed[T](c, "")
+// Get resolves an instance of type T from the container or scope.
+func Get[T any](c Container) (T, error) {
+	return GetNamed[T](c, "")
 }
 
-// ResolveNamed resolves an instance of type T with a specific name from the container or scope.
-func ResolveNamed[T any](c Container, name string) (T, error) {
+// GetNamed resolves an instance of type T with a specific name from the container or scope.
+func GetNamed[T any](c Container, name string) (T, error) {
 	var zero T
 	typ := reflect.TypeOf((*T)(nil)).Elem()
 
@@ -121,9 +127,6 @@ func ResolveNamed[T any](c Container, name string) (T, error) {
 	}
 
 	if val == nil {
-		// If the value is nil but no error, it might be a valid nil for pointers/interfaces,
-		// but usually we expect a value.
-		// However, for interface T, val should be convertible to T.
 		return zero, nil
 	}
 
@@ -133,4 +136,41 @@ func ResolveNamed[T any](c Container, name string) (T, error) {
 	}
 
 	return zero, fmt.Errorf("di: resolved value is %T, expected %v", val, typ)
+}
+
+// Invoke executes a function, injecting dependencies into its arguments.
+// The function can return an error as its last return value.
+func Invoke(c Container, fn any) error {
+	fnVal := reflect.ValueOf(fn)
+	if fnVal.Kind() != reflect.Func {
+		return fmt.Errorf("di: invoke target must be a function")
+	}
+	fnType := fnVal.Type()
+
+	// Prepare arguments
+	args := make([]reflect.Value, fnType.NumIn())
+	for i := 0; i < fnType.NumIn(); i++ {
+		argType := fnType.In(i)
+		// Currently Invoke only supports type-based injection
+		val, err := c.Get(argType)
+		if err != nil {
+			return fmt.Errorf("di: failed to resolve argument %d (%v): %w", i, argType, err)
+		}
+		args[i] = reflect.ValueOf(val)
+	}
+
+	// Call function
+	results := fnVal.Call(args)
+
+	// Check error return
+	if len(results) > 0 {
+		last := results[len(results)-1]
+		if last.Type().Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+			if !last.IsNil() {
+				return last.Interface().(error)
+			}
+		}
+	}
+
+	return nil
 }
