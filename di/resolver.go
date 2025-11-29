@@ -15,6 +15,17 @@ func newResolver() *resolver {
 // 它使用提供的容器 c 递归解析依赖项。
 func (r *resolver) createInstance(c Container, def *ServiceDefinition) (any, error) {
 	if def.IsValue {
+		// 如果标记了 InjectFields 并且有 schema，则尝试注入字段
+		if def.InjectFields && def.Schema != nil {
+			val := reflect.ValueOf(def.Impl)
+			// 确保我们操作的是结构体（通常是指针指向的结构体）
+			// 如果 Impl 是 *Struct，Elem() 就是 Struct，可以被设置
+			if val.Kind() == reflect.Ptr && val.Elem().Kind() == reflect.Struct {
+				if err := r.injectFields(c, val.Elem(), def.Schema); err != nil {
+					return nil, fmt.Errorf("failed to inject fields for value instance: %w", err)
+				}
+			}
+		}
 		return def.Impl, nil
 	}
 

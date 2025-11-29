@@ -4,16 +4,19 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gocrud/app/di"
 	"github.com/gocrud/app/logging"
 )
 
 // Builder Web 主机构建器（基于 Gin）
 type Builder struct {
-	logger logging.Logger
-	port   int
-	engine *gin.Engine
+	logger          logging.Logger
+	port            int
+	engine          *gin.Engine
+	controllerCtors []any // 存储控制器构造函数或实例
 }
 
 // NewBuilder 创建 Web 构建器
@@ -27,9 +30,10 @@ func NewBuilder(logger logging.Logger) *Builder {
 	engine.Use(gin.Recovery())
 
 	return &Builder{
-		logger: logger,
-		port:   8080,
-		engine: engine,
+		logger:          logger,
+		port:            8080,
+		engine:          engine,
+		controllerCtors: make([]any, 0),
 	}
 }
 
@@ -51,12 +55,13 @@ type Controller interface {
 	RegisterRoutes(router gin.IRouter)
 }
 
-// WithControllers 注册控制器 (Fluent API)
-// 注意：这里的控制器应该是已经初始化好的实例（支持通过 DI 获取）
-func (b *Builder) WithControllers(controllers ...Controller) *Builder {
-	for _, c := range controllers {
-		c.RegisterRoutes(b.engine)
-	}
+// AddControllers 注册控制器
+// 传入参数可以是：
+// 1. 控制器的构造函数 (例如 NewUserController) -> 推荐，支持构造函数注入
+// 2. 控制器实例指针 (例如 &UserController{}) -> 支持字段注入 (di tag)
+// 这些控制器将在 Host 启动时通过 DI 容器进行解析和路由注册
+func (b *Builder) AddControllers(controllers ...any) *Builder {
+	b.controllerCtors = append(b.controllerCtors, controllers...)
 	return b
 }
 
@@ -155,28 +160,85 @@ func (b *Builder) Engine() *gin.Engine {
 }
 
 // Build 构建 Web 主机
-func (b *Builder) Build() *Host {
+// 这里的 container 必须是全局的 DI 容器，用于后续解析 Controller
+func (b *Builder) Build(container di.Container) *Host {
+	// 将所有控制器构造函数/实例注册到 DI 容器中
+	registeredTypes := make([]reflect.Type, 0, len(b.controllerCtors))
+
+	for _, item := range b.controllerCtors {
+		// 使用 di.RegisterAuto 进行智能注册
+		// 它会自动处理构造函数或实例指针，并支持字段注入
+		serviceType, err := di.RegisterAuto(container, item)
+		if err != nil {
+			// 如果是因为重复注册，我们记录警告并继续使用该类型
+			// 但目前的 RegisterAuto 并没有返回错误类型区分，
+			// 且如果注册失败我们也不知道已注册的服务类型是什么（除非我们自己再次推断）。
+			// 为了健壮性，如果注册失败，我们尝试推断类型并记录，以便后续尝试 Resolve。
+
+			// 简单的策略：如果是“已注册”错误，我们假设用户手动注册了，尝试推断类型并加入列表。
+			// 但这里我们简单地记录警告，并不阻断 Build，
+			// 因为如果真正出错（如不支持的类型），Resolve 时自然会失败。
+			b.logger.Warn("web: failed to auto-register controller (might be already registered or invalid)",
+				logging.Field{Key: "error", Value: err.Error()},
+				logging.Field{Key: "item", Value: fmt.Sprintf("%T", item)})
+
+			// 尝试手动推断类型以添加到 registeredTypes
+			// 这样即使注册失败（因重复），我们也能尝试在 Start 时 Resolve 它
+			inferredType := inferServiceType(item)
+			if inferredType != nil {
+				registeredTypes = append(registeredTypes, inferredType)
+			}
+			continue
+		}
+
+		registeredTypes = append(registeredTypes, serviceType)
+	}
+
 	return &Host{
-		port:   b.port,
-		engine: b.engine,
+		port:            b.port,
+		engine:          b.engine,
+		container:       container,
+		controllerTypes: registeredTypes,
 		server: &http.Server{
 			Addr:    fmt.Sprintf(":%d", b.port),
-			Handler: b.engine, // Gin Engine 实现了 http.Handler
+			Handler: b.engine,
 		},
 		logger: b.logger,
 	}
 }
 
+// inferServiceType 尝试推断服务类型（仅用于错误恢复）
+func inferServiceType(target any) reflect.Type {
+	val := reflect.ValueOf(target)
+	if val.Kind() == reflect.Func {
+		if val.Type().NumOut() > 0 {
+			return val.Type().Out(0)
+		}
+	} else if val.Kind() == reflect.Ptr {
+		return val.Type()
+	} else if t, ok := target.(reflect.Type); ok {
+		return t
+	}
+	return nil
+}
+
 // Host Web 主机
 type Host struct {
-	port   int
-	engine *gin.Engine
-	server *http.Server
-	logger logging.Logger
+	port            int
+	engine          *gin.Engine
+	server          *http.Server
+	logger          logging.Logger
+	container       di.Container
+	controllerTypes []reflect.Type
 }
 
 // Start 启动 Web 主机
 func (h *Host) Start(ctx context.Context) error {
+	// 1. 延迟解析并注册控制器路由
+	if err := h.mapControllers(); err != nil {
+		return fmt.Errorf("web: failed to map controllers: %w", err)
+	}
+
 	h.logger.Info("Starting web host",
 		logging.Field{Key: "port", Value: h.port})
 
@@ -207,6 +269,28 @@ func (h *Host) Start(ctx context.Context) error {
 		// 上下文取消，触发关闭
 		return nil // Stop 会负责关闭
 	}
+}
+
+// mapControllers 从容器解析并注册控制器
+func (h *Host) mapControllers() error {
+	for _, typ := range h.controllerTypes {
+		// 从容器获取实例
+		instance, err := h.container.Get(typ)
+		if err != nil {
+			return fmt.Errorf("failed to resolve controller %v: %w", typ, err)
+		}
+
+		// 断言为 Controller 接口
+		ctrl, ok := instance.(Controller)
+		if !ok {
+			return fmt.Errorf("instance %v does not implement web.Controller interface", typ)
+		}
+
+		// 注册路由
+		ctrl.RegisterRoutes(h.engine)
+		h.logger.Debug("Mapped controller routes", logging.Field{Key: "controller", Value: typ.String()})
+	}
+	return nil
 }
 
 // Stop 停止 Web 主机

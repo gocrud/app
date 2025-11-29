@@ -15,7 +15,8 @@ func Configure(options func(*Builder)) core.Configurator {
 		}
 
 		// 构建 Web Host
-		webHost := builder.Build()
+		// 传入 DI 容器，以便 Host 启动时能解析 Controller
+		webHost := builder.Build(ctx.GetContainer())
 
 		// 直接添加到托管服务列表
 		ctx.AddHostedService(webHost)

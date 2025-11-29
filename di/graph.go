@@ -80,8 +80,13 @@ func (g *graphBuilder) buildOrder() ([]ServiceKey, error) {
 func (g *graphBuilder) inspectDependencies(def *ServiceDefinition) ([]ServiceKey, error) {
 	def.Schema = &InjectionSchema{}
 
-	// 情况 1: 值 - 无依赖
+	// 情况 1: 值 - 仅当开启了 InjectFields 时才分析依赖
 	if def.IsValue {
+		if def.InjectFields {
+			// 分析实例值的结构体字段
+			valType := reflect.TypeOf(def.Impl)
+			return g.analyzeStruct(valType, def.Schema)
+		}
 		return nil, nil
 	}
 

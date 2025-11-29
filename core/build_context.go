@@ -56,6 +56,12 @@ func (c *BuildContext) Container() di.Container {
 	return c.container
 }
 
+// GetContainer 返回底层的 DI 容器（别名 Container）
+// 用于保持 API 命名风格一致性
+func (c *BuildContext) GetContainer() di.Container {
+	return c.container
+}
+
 // ResolveService 从容器中解析服务
 // 注意：仅在必要时使用此方法，优先使用 Register 系列方法注册服务
 func (c *BuildContext) ResolveService(serviceType reflect.Type) (any, error) {

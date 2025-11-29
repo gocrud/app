@@ -59,3 +59,11 @@ func Use[T any]() Option {
 		s.ImplType = reflect.TypeOf((*T)(nil)).Elem()
 	}
 }
+
+// WithFields 启用结构体字段的依赖注入（扫描 di tag）。
+// 即使是 WithValue 注册的实例，也会尝试注入带有 di tag 的字段。
+func WithFields() Option {
+	return func(s *ServiceDefinition) {
+		s.InjectFields = true
+	}
+}

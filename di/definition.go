@@ -40,14 +40,15 @@ type InjectionSchema struct {
 
 // ServiceDefinition 包含注册服务的元数据。
 type ServiceDefinition struct {
-	ID        int
-	Type      reflect.Type
-	Name      string // 服务名称
-	Scope     ScopeType
-	ImplType  reflect.Type // 用于结构体反射
-	Impl      any          // 工厂函数或结构体指针
-	IsFactory bool
-	IsValue   bool
+	ID           int
+	Type         reflect.Type
+	Name         string // 服务名称
+	Scope        ScopeType
+	ImplType     reflect.Type // 用于结构体反射
+	Impl         any          // 工厂函数或结构体指针
+	IsFactory    bool
+	IsValue      bool
+	InjectFields bool // 是否对 IsValue 的实例执行字段注入
 
 	Schema *InjectionSchema // 预计算的依赖图
 
